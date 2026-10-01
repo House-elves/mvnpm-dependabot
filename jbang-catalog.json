@@ -1,0 +1,9 @@
+{
+  "catalogs": {},
+  "aliases": {
+    "mvnpm-dependabot": {
+      "script-ref": "MvnpmDependabot.java",
+      "description": "House Elf that validates Dependabot mvnpm PRs: BOM range checks, CI resolution, a snapshot build and a real Dev UI test."
+    }
+  }
+}
