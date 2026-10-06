@@ -29,12 +29,20 @@ final class StateStore {
         return new StateStore(path, MAPPER.createObjectNode());
     }
 
-    boolean checked(int pr, String sha) {
-        return sha.equals(root.path(String.valueOf(pr)).path("sha").asText());
+    /**
+     * Entries are keyed owner/name#number. Before the elf watched more than
+     * one repo they were keyed by the bare number, and those are Quarkus's.
+     */
+    private static String key(String repo, int pr) { return repo + "#" + pr; }
+
+    boolean checked(String repo, int pr, String sha) {
+        if (sha.equals(root.path(key(repo, pr)).path("sha").asText())) return true;
+        return repo.equals(Target.QUARKUS) && sha.equals(root.path(String.valueOf(pr)).path("sha").asText());
     }
 
-    void record(int pr, String sha, String verdict, boolean approved, String commentUrl) throws IOException {
-        ObjectNode n = root.putObject(String.valueOf(pr));
+    void record(String repo, int pr, String sha, String verdict, boolean approved, String commentUrl) throws IOException {
+        if (repo.equals(Target.QUARKUS)) root.remove(String.valueOf(pr));
+        ObjectNode n = root.putObject(key(repo, pr));
         n.put("sha", sha);
         n.put("verdict", verdict);
         n.put("approved", approved);

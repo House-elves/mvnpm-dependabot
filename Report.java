@@ -11,6 +11,7 @@ final class Report {
     enum Verdict { SAFE, NOT_SAFE, NEEDS_HUMAN }
 
     static final class Check {
+        final Target target;
         final GitHub.Pr pr;
         BomAnalyzer.Analysis analysis;
         String analysisError;
@@ -19,12 +20,16 @@ final class Report {
         boolean goOfflineRan;
         List<String> goOfflineErrors = List.of();
         DevUiTester.Outcome ui;
+        DevUiTester.Outcome baseline;   // the base branch alone, when the bumps' run failed
         String uiHow = "";          // how the Dev UI result was attributed to this PR
         Verdict verdict;
         final List<String> reasons = new ArrayList<>();
         boolean approve;
 
-        Check(GitHub.Pr pr) { this.pr = pr; }
+        Check(Target target, GitHub.Pr pr) {
+            this.target = target;
+            this.pr = pr;
+        }
 
         /** Failed before anything was built - it is left out of the merge. */
         boolean staticFail() {
@@ -53,33 +58,37 @@ final class Report {
             c.reasons.add("the branch does not merge cleanly into main - `@dependabot rebase` it");
         } else if (c.buildError != null) {
             c.verdict = Verdict.NEEDS_HUMAN;
-            c.reasons.add("the Quarkus build with this bump failed: " + c.buildError);
+            c.reasons.add((c.target.quarkus() ? "the Quarkus build" : "the build (or the tests)")
+                    + " with this bump failed: " + c.buildError);
         } else if (!c.goOfflineErrors.isEmpty()) {
             c.verdict = Verdict.NOT_SAFE;
             c.reasons.add("CI's `dependency:go-offline` step fails with this bump (it will break the Initial JDK build)");
         } else if (c.ui == null || !c.ui.ran()) {
             c.verdict = Verdict.NEEDS_HUMAN;
-            c.reasons.add("the Dev UI test did not run: " + (c.ui == null ? "skipped" : c.ui.summary()));
+            c.reasons.add("the " + c.target.uiName() + " test did not run: " + (c.ui == null ? "skipped" : c.ui.summary()));
         } else if (!c.ui.pass()) {
             boolean blamed = c.uiHow.startsWith("failed with only this bump");
             c.verdict = blamed ? Verdict.NOT_SAFE : Verdict.NEEDS_HUMAN;
-            c.reasons.add("the Dev UI test failed (" + c.uiHow + "): " + c.ui.summary());
+            c.reasons.add("the " + c.target.uiName() + " test failed (" + c.uiHow + "): " + c.ui.summary());
+            if (c.baseline != null && c.baseline.ran()) {
+                c.reasons.add("without the bump: " + c.baseline.summary());
+            }
         } else if (c.uiHow.startsWith("passes alone")) {
             // Each bump is fine on its own but not together: merging them all would break.
             c.verdict = Verdict.NEEDS_HUMAN;
-            c.reasons.add("the Dev UI " + c.uiHow + " - merge the bumps one at a time");
+            c.reasons.add("the " + c.target.uiName() + " " + c.uiHow + " - merge the bumps one at a time");
         } else {
             c.verdict = Verdict.SAFE;
         }
 
         c.approve = c.verdict == Verdict.SAFE && (!a.major() || !a.root() || config.approveMajor);
         if (c.verdict == Verdict.SAFE && !c.approve) {
-            c.reasons.add("all checks pass, but this is a major version bump of a library the Dev UI uses directly, "
-                    + "so the approval is left to you");
+            c.reasons.add("all checks pass, but this is a major version bump of a library the " + c.target.uiName()
+                    + " uses directly, so the approval is left to you");
         }
     }
 
-    static String comment(Check c, Config config, String mainSha) {
+    static String comment(Check c, Config config, String baseBranch, String baseSha) {
         var a = c.analysis;
         StringBuilder sb = new StringBuilder(GitHub.MARKER).append('\n');
         String headline = switch (c.verdict) {
@@ -93,7 +102,11 @@ final class Report {
         if (!c.reasons.isEmpty()) sb.append('\n');
 
         sb.append("| Check | Result |\n|---|---|\n");
-        if (a != null) {
+        if (a != null && !c.target.quarkus()) {
+            sb.append("| Used by | ").append(a.modules().isEmpty() ? "⚠️ no module declares it"
+                    : a.modules().stream().map(m -> "`" + m + "`").collect(Collectors.joining(", "))).append(" |\n");
+            if (a.major()) sb.append("| Major bump | ⚠️ `").append(a.from()).append("` → `").append(a.to()).append("` |\n");
+        } else if (a != null) {
             String kind = a.root()
                     ? "Root - nothing else in the BOM depends on it"
                     : "Transitive - pulled in by " + a.constraints().stream()
@@ -113,17 +126,18 @@ final class Report {
             if (a.major()) sb.append("| Major bump | ⚠️ `").append(a.from()).append("` → `").append(a.to()).append("` |\n");
         }
         if (!c.staticFail()) {
-            sb.append("| Merges into main | ").append(c.conflicted ? "❌ conflicts" : "✅").append(" |\n");
+            sb.append("| Merges into ").append(baseBranch).append(" | ").append(c.conflicted ? "❌ conflicts" : "✅").append(" |\n");
         }
         if (!c.staticFail() && !c.conflicted) {
-            sb.append("| Quarkus build | ").append(c.buildError == null ? "✅" : "❌").append(" |\n");
+            sb.append(c.target.quarkus() ? "| Quarkus build | " : "| Build and module tests | ")
+              .append(c.buildError == null ? "✅" : "❌").append(" |\n");
             if (c.goOfflineRan) {
                 sb.append("| CI dependency resolution (`go-offline` on ")
                   .append(a.modules().stream().map(m -> "`" + m + "`").collect(Collectors.joining(", ")))
                   .append(") | ").append(c.goOfflineErrors.isEmpty() ? "✅" : "❌").append(" |\n");
             }
             if (c.ui != null) {
-                sb.append("| Dev UI test (headless Chrome) | ")
+                sb.append("| ").append(c.target.uiName()).append(" test (headless Chrome) | ")
                   .append(!c.ui.ran() ? "⚠️ did not run" : c.ui.pass() ? "✅ " : "❌ ")
                   .append(c.ui.ran() ? oneLine(c.ui.summary()) : "").append(" |\n");
             }
@@ -137,17 +151,21 @@ final class Report {
         if (a != null && !a.depChanges().isEmpty()) {
             sb.append("\n<details><summary>Dependency changes in `").append(a.ga()).append("` ")
               .append(a.from()).append(" → ").append(a.to()).append("</summary>\n\n")
-              .append("| Dependency | Before | After | BOM pin |\n|---|---|---|---|\n");
+              .append(c.target.quarkus() ? "| Dependency | Before | After | BOM pin |\n|---|---|---|---|\n"
+                                         : "| Dependency | Before | After |\n|---|---|---|\n");
             for (var d : a.depChanges()) {
                 sb.append("| `").append(d.ga()).append("` | ").append(code(d.oldSpec())).append(" | ")
-                  .append(code(d.newSpec())).append(" | ").append(code(d.pinned()))
-                  .append(d.pinInRange() == null ? "" : d.pinInRange() ? " ✅" : " ⚠️ outside new range")
-                  .append(" |\n");
+                  .append(code(d.newSpec()));
+                if (c.target.quarkus()) {
+                    sb.append(" | ").append(code(d.pinned()))
+                      .append(d.pinInRange() == null ? "" : d.pinInRange() ? " ✅" : " ⚠️ outside new range");
+                }
+                sb.append(" |\n");
             }
             sb.append("\n</details>\n");
         }
         if (c.ui != null && c.ui.ran()) {
-            sb.append("\n<details><summary>Dev UI pages checked (").append(c.uiHow).append(")</summary>\n\n");
+            sb.append("\n<details><summary>").append(c.target.uiName()).append(" pages checked (").append(c.uiHow).append(")</summary>\n\n");
             if (a != null && !a.jsImporters().isEmpty()) {
                 sb.append("Uses of the library: ")
                   .append(a.jsImporters().stream().map(j -> "`" + j + "`").collect(Collectors.joining(", "))).append("\n\n");
@@ -162,15 +180,16 @@ final class Report {
                 sb.append("```\n");
             }
             if (!c.ui.serverErrors().isEmpty()) {
-                sb.append("\nServer log errors during the session:\n```\n");
+                sb.append(c.target.quarkus() ? "\nServer log errors during the session:\n```\n"
+                                             : "\nRequests nothing could answer during the session:\n```\n");
                 c.ui.serverErrors().forEach(e -> sb.append(e).append('\n'));
                 sb.append("```\n");
             }
             sb.append("\n</details>\n");
         }
 
-        sb.append("\n<sub>Checked against `").append(mainSha, 0, Math.min(10, mainSha.length()))
-          .append("` (main) + `").append(c.pr.sha(), 0, Math.min(10, c.pr.sha().length()))
+        sb.append("\n<sub>Checked against `").append(baseSha, 0, Math.min(10, baseSha.length()))
+          .append("` (").append(baseBranch).append(") + `").append(c.pr.sha(), 0, Math.min(10, c.pr.sha().length()))
           .append("` by the [mvnpm-dependabot](https://github.com/House-elves/mvnpm-dependabot) House Elf.</sub>\n");
         return sb.toString();
     }

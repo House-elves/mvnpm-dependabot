@@ -30,13 +30,18 @@ final class GitHub {
     }
 
     private final Config config;
+    private final String repo;
     private String token;
 
-    GitHub(Config config) { this.config = config; }
+    /** A client for one repo; every call below is against it. */
+    GitHub(Config config, String repo) {
+        this.config = config;
+        this.repo = repo;
+    }
 
     /** Open Dependabot PRs that bump an org.mvnpm(.*) artifact. */
     List<Pr> mvnpmPrs() throws IOException {
-        JsonNode arr = json(gh("pr", "list", "--repo", config.repo, "--author", "app/dependabot",
+        JsonNode arr = json(gh("pr", "list", "--repo", repo, "--author", "app/dependabot",
                 "--state", "open", "--limit", "100",
                 "--json", "number,title,headRefName,headRefOid,url"));
         List<Pr> out = new ArrayList<>();
@@ -57,7 +62,7 @@ final class GitHub {
 
     /** One PR by number, whatever its author - for --pr runs. */
     Pr pr(int number) throws IOException {
-        JsonNode n = json(gh("pr", "view", String.valueOf(number), "--repo", config.repo,
+        JsonNode n = json(gh("pr", "view", String.valueOf(number), "--repo", repo,
                 "--json", "number,title,headRefName,headRefOid,url"));
         Matcher m = BUMP.matcher(n.path("title").asText());
         boolean ok = m.find() && m.group(1).startsWith("org.mvnpm");
@@ -70,7 +75,7 @@ final class GitHub {
     /** True when GITHUB_USER already left an APPROVED review on exactly this commit. */
     boolean approvedAt(int number, String sha) throws IOException {
         JsonNode reviews = json(gh("api", "--paginate", "--slurp",
-                "repos/" + config.repo + "/pulls/" + number + "/reviews"));
+                "repos/" + repo + "/pulls/" + number + "/reviews"));
         for (JsonNode page : reviews) {
             for (JsonNode r : page) {
                 if (r.path("user").path("login").asText().equalsIgnoreCase(config.githubUser)
@@ -86,25 +91,25 @@ final class GitHub {
     /** Creates the elf's comment, or edits it in place when one exists. Returns its URL. */
     String upsertComment(int number, String body) throws IOException {
         JsonNode pages = json(gh("api", "--paginate", "--slurp",
-                "repos/" + config.repo + "/issues/" + number + "/comments"));
+                "repos/" + repo + "/issues/" + number + "/comments"));
         for (JsonNode page : pages) {
             for (JsonNode c : page) {
                 if (c.path("user").path("login").asText().equalsIgnoreCase(config.githubUser)
                         && c.path("body").asText().contains(MARKER)) {
                     JsonNode edited = json(ghStdin(body, "api", "-X", "PATCH",
-                            "repos/" + config.repo + "/issues/comments/" + c.path("id").asLong(),
+                            "repos/" + repo + "/issues/comments/" + c.path("id").asLong(),
                             "-F", "body=@-"));
                     return edited.path("html_url").asText();
                 }
             }
         }
         JsonNode created = json(ghStdin(body, "api", "-X", "POST",
-                "repos/" + config.repo + "/issues/" + number + "/comments", "-F", "body=@-"));
+                "repos/" + repo + "/issues/" + number + "/comments", "-F", "body=@-"));
         return created.path("html_url").asText();
     }
 
     void approve(int number, String body) throws IOException {
-        ghStdin(body, "pr", "review", String.valueOf(number), "--repo", config.repo,
+        ghStdin(body, "pr", "review", String.valueOf(number), "--repo", repo,
                 "--approve", "--body-file", "-");
     }
 

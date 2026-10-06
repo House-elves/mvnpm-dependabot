@@ -4,7 +4,8 @@
 //DEPS com.fasterxml.jackson.core:jackson-databind:2.17.2
 //DEPS org.apache.maven:maven-artifact:3.9.9
 //DEPS org.eclipse.angus:angus-mail:2.0.3
-//SOURCES Config.java Exec.java GitHub.java BomAnalyzer.java Workspace.java DevUiTester.java
+//SOURCES Config.java Target.java Exec.java GitHub.java BomAnalyzer.java Workspace.java DevUiTester.java
+//SOURCES WebUiTester.java
 //SOURCES Report.java StateStore.java Notifier.java Installer.java
 
 import picocli.CommandLine;
@@ -31,13 +32,15 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import java.util.stream.Stream;
 
 /**
  * A House Elf that does the morning round of Dependabot's mvnpm PRs on
- * Quarkus, so the principal only has to make the final call.
+ * Quarkus (and any other repo in REPOS), so the principal only has to make
+ * the final call.
  *
- * For each open PR that bumps an org.mvnpm artifact it:
+ * For each open Quarkus PR that bumps an org.mvnpm artifact it:
  *   1. checks the bump against the BOM: a transitive pin must stay inside the
  *      range its pinned parents ask for (BomAnalyzer);
  *   2. merges all the surviving PRs onto main in its own clone and builds a
@@ -49,6 +52,11 @@ import java.util.stream.Stream;
  *      (DevUiTester);
  *   5. comments on each PR as GITHUB_USER, approves the safe ones, and emails
  *      a summary.
+ *
+ * Any other repo is a plain Maven project: the bumps are merged, the modules
+ * that declare them are built and tested, and the web UI they package is
+ * served and driven the same way (WebUiTester). Steps 5 and the bisecting are
+ * shared.
  */
 @Command(name = "mvnpm-dependabot", mixinStandardHelpOptions = true, version = "1.0.0",
         description = "Validates Dependabot mvnpm PRs: BOM ranges, CI resolution, snapshot build, Dev UI test.")
@@ -63,7 +71,11 @@ public class MvnpmDependabot implements Callable<Integer> {
     @Option(names = "--dry-run", description = "Do everything except comment, approve or email; print the comments.")
     boolean dryRun;
 
-    @Option(names = "--pr", description = "Check only these PR numbers (repeatable), even if already checked.")
+    @Option(names = "--repo", description = "Only this repo (owner/name); defaults to every repo in REPOS.")
+    String repoOption;
+
+    @Option(names = "--pr", description = "Check only these PR numbers (repeatable), even if already checked. "
+            + "They belong to --repo, or to the first repo in REPOS.")
     List<Integer> prNumbers = new ArrayList<>();
 
     @Option(names = "--force", description = "Re-check PRs already checked at their current commit.")
@@ -106,7 +118,38 @@ public class MvnpmDependabot implements Callable<Integer> {
     }
 
     private int round(Config config) throws IOException {
-        GitHub gh = new GitHub(config);
+        List<Target> targets = config.targets();
+        if (repoOption != null) {
+            targets = targets.stream().filter(t -> t.repo().equals(repoOption)).toList();
+            if (targets.isEmpty()) {
+                System.err.println(repoOption + " is not in REPOS " + config.repos);
+                return 1;
+            }
+        } else if (!prNumbers.isEmpty()) {
+            targets = targets.subList(0, 1);
+        }
+
+        Path runDir = config.runsDir().resolve(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")));
+        List<Report.Check> all = new ArrayList<>();
+        int exit = 0;
+        for (Target t : targets) {
+            // One repo failing (GitHub down, a clone that will not fetch) must not cost the others their round.
+            try {
+                all.addAll(checkRepo(config, t, runDir));
+            } catch (IOException e) {
+                System.err.println(t.repo() + ": " + e.getMessage());
+                exit = 1;
+            }
+        }
+        if (!all.isEmpty()) {
+            if (!dryRun) new Notifier(config).sendSummary(all, runDir.toString());
+            System.out.println("run artifacts: " + runDir);
+        }
+        return exit;
+    }
+
+    private List<Report.Check> checkRepo(Config config, Target target, Path topRunDir) throws IOException {
+        GitHub gh = new GitHub(config, target.repo());
         StateStore state = StateStore.open(config.statePath());
 
         List<GitHub.Pr> prs = new ArrayList<>();
@@ -114,31 +157,31 @@ public class MvnpmDependabot implements Callable<Integer> {
             for (int n : prNumbers) prs.add(gh.pr(n));
         } else {
             for (GitHub.Pr pr : gh.mvnpmPrs()) {
-                if (force || !state.checked(pr.number(), pr.sha())) prs.add(pr);
+                if (force || !state.checked(target.repo(), pr.number(), pr.sha())) prs.add(pr);
             }
         }
         if (prs.isEmpty()) {
-            System.out.println("no new Dependabot mvnpm PRs to check");
-            return 0;
+            System.out.println(target.repo() + ": no new Dependabot mvnpm PRs to check");
+            return List.of();
         }
-        System.out.println("checking " + prs.size() + " PR(s): "
+        System.out.println(target.repo() + ": checking " + prs.size() + " PR(s): "
                 + prs.stream().map(p -> "#" + p.number()).toList());
 
-        Path runDir = config.runsDir().resolve(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")));
+        Path runDir = topRunDir.resolve(target.name());
         Files.createDirectories(runDir);
         pruneRuns(config.runsDir(), 14);
 
-        Workspace ws = new Workspace(config, runDir);
-        String mainSha = ws.resetToMain();
+        Workspace ws = new Workspace(config, target, runDir);
+        String baseSha = ws.resetToMain();
 
-        // 1. Static: the BOM's ranges.
+        // 1. Static: the BOM's ranges (Quarkus), or just what the bump changes (anything else).
         BomAnalyzer analyzer = new BomAnalyzer(config, ws.dir());
         List<Report.Check> checks = new ArrayList<>();
         for (GitHub.Pr pr : prs) {
-            Report.Check c = new Report.Check(pr);
+            Report.Check c = new Report.Check(target, pr);
             if (pr.parsed()) {
                 try {
-                    c.analysis = analyzer.analyze(pr);
+                    c.analysis = target.quarkus() ? analyzer.analyze(pr) : analyzer.analyzeDirect(pr);
                 } catch (IOException e) {
                     c.analysisError = e.getMessage();
                 }
@@ -159,15 +202,19 @@ public class MvnpmDependabot implements Callable<Integer> {
             }
         }
         if (!merged.isEmpty()) {
-            buildAndTest(config, ws, runDir, merged);
+            if (target.quarkus()) {
+                buildAndTest(config, ws, runDir, merged);
+            } else {
+                buildAndTestMaven(config, target, ws, runDir, merged);
+            }
         }
 
         // 5. Verdicts, comments, approvals.
         for (Report.Check c : checks) {
             Report.decide(c, config);
-            String body = Report.comment(c, config, mainSha);
+            String body = Report.comment(c, config, ws.branch(), baseSha);
             Files.writeString(runDir.resolve("comment-" + c.pr.number() + ".md"), body);
-            System.out.printf("#%d -> %s%s%n", c.pr.number(), c.verdict, c.approve ? " (approve)" : "");
+            System.out.printf("%s#%d -> %s%s%n", target.repo(), c.pr.number(), c.verdict, c.approve ? " (approve)" : "");
             if (dryRun) {
                 System.out.println(body);
                 continue;
@@ -180,12 +227,9 @@ public class MvnpmDependabot implements Callable<Integer> {
                 }
                 approved = true;
             }
-            state.record(c.pr.number(), c.pr.sha(), c.verdict.name(), approved, url);
+            state.record(target.repo(), c.pr.number(), c.pr.sha(), c.verdict.name(), approved, url);
         }
-
-        if (!dryRun) new Notifier(config).sendSummary(checks, runDir.toString());
-        System.out.println("run artifacts: " + runDir);
-        return 0;
+        return checks;
     }
 
     private void buildAndTest(Config config, Workspace ws, Path runDir, List<Report.Check> merged) throws IOException {
@@ -223,44 +267,89 @@ public class MvnpmDependabot implements Callable<Integer> {
         merged.forEach(c -> extensions.addAll(c.analysis.extensions()));
         if (extensions.contains(DevUiTester.DATASOURCE)) extensions.addAll(DevUiTester.DATASOURCE_EXTRAS);
         System.out.println("Dev UI test with extensions " + extensions);
-        var together = tester.test("combined", extensions, focus(merged));
+        uiBisect(ws, "Dev UI", merged,
+                () -> ws.installBoms().exitCode() == 0,
+                (label, bumps) -> tester.test(label, extensions, focus(bumps)));
+    }
+
+    /** A plain Maven repo: build and test the modules that use the bumps, then their web UI. */
+    private void buildAndTestMaven(Config config, Target target, Workspace ws, Path runDir,
+                                   List<Report.Check> merged) throws IOException {
+        Set<String> modules = new TreeSet<>();
+        merged.forEach(c -> modules.addAll(c.analysis.modules()));
+        System.out.println("building " + target.repo() + " with " + merged.size() + " bump(s), testing "
+                + (modules.isEmpty() ? "nothing (no module declares the bumps)" : modules)
+                + " (log: " + runDir.resolve("build.log") + ")");
+        var build = ws.buildModules(modules, true);
+        if (build.exitCode() != 0) {
+            String why = build.timedOut() ? "timed out" : String.join("; ", Workspace.errors(runDir.resolve("build.log")));
+            merged.forEach(c -> c.buildError = why.isBlank() ? "see build.log" : why);
+            return;
+        }
+
+        if (skipUi) return;
+
+        // 4. The web UI those modules package, all bumps together first.
+        WebUiTester tester = new WebUiTester(config, target, ws, runDir);
+        System.out.println("web UI test of " + modules);
+        uiBisect(ws, "web UI", merged,
+                () -> ws.buildModules(modules, false).exitCode() == 0,
+                (label, bumps) -> tester.test(label, modules, focus(bumps)));
+    }
+
+    interface UiRun {
+        DevUiTester.Outcome test(String label, List<Report.Check> bumps);
+    }
+
+    /**
+     * Tests every bump together. When that fails: is the base branch itself
+     * broken? If not, each bump alone, so the failure lands on the right PR.
+     * `rebuild` makes the current tree testable after a reset and merge. The
+     * baseline session is given no bumps, so it judges the base branch as is.
+     */
+    private static void uiBisect(Workspace ws, String uiName, List<Report.Check> merged,
+                                 BooleanSupplier rebuild, UiRun ui) throws IOException {
+        String base = ws.branch();
+        var together = ui.test("combined", merged);
         if (!together.ran() || together.pass()) {
             for (var c : merged) {
                 c.ui = together;
-                c.uiHow = merged.size() == 1 ? "this bump on main" : "together with the other " + (merged.size() - 1) + " bump(s)";
+                c.uiHow = merged.size() == 1 ? "this bump on " + base : "together with the other " + (merged.size() - 1) + " bump(s)";
             }
             return;
         }
 
-        // It failed: is main itself broken?
-        System.out.println("Dev UI test failed; checking main without any bump");
+        // It failed: is the base branch itself broken?
+        System.out.println(uiName + " test failed; checking " + base + " without any bump");
         ws.resetToMain();
-        ws.installBoms();
-        var baseline = tester.test("baseline", extensions, focus(merged));
+        var baseline = rebuild.getAsBoolean() ? ui.test("baseline", List.of())
+                : DevUiTester.Outcome.notRun("the rebuild of " + base + " without the bumps failed");
         if (!baseline.ran() || !baseline.pass()) {
             for (var c : merged) {
                 c.ui = together;
-                c.uiHow = baseline.ran() ? "but it also fails on main without any bump" : "and the baseline run on main did not complete";
+                c.uiHow = baseline.ran() ? "but it also fails on " + base + " without any bump"
+                        : "and the baseline run on " + base + " did not complete";
+                c.baseline = baseline;
             }
             return;
         }
         if (merged.size() == 1) {
             merged.get(0).ui = together;
-            merged.get(0).uiHow = "failed with only this bump; passes on main";
+            merged.get(0).uiHow = "failed with only this bump; passes on " + base;
             return;
         }
 
-        // Main is fine, so bisect: each bump alone.
+        // The base branch is fine, so bisect: each bump alone.
         for (var c : merged) {
-            System.out.println("Dev UI test with only #" + c.pr.number());
+            System.out.println(uiName + " test with only #" + c.pr.number());
             ws.resetToMain();
             ws.merge(c.pr);
-            ws.installBoms();
-            var alone = tester.test("pr-" + c.pr.number(), extensions, focus(List.of(c)));
+            var alone = rebuild.getAsBoolean() ? ui.test("pr-" + c.pr.number(), List.of(c))
+                    : DevUiTester.Outcome.notRun("the rebuild with only this bump failed");
             c.ui = alone;
             c.uiHow = !alone.ran() ? "did not complete alone"
                     : alone.pass() ? "passes alone; the combined run with the other bumps failed"
-                    : "failed with only this bump; passes on main";
+                    : "failed with only this bump; passes on " + base;
         }
     }
 
@@ -274,9 +363,10 @@ public class MvnpmDependabot implements Callable<Integer> {
     }
 
     private static void printStatus(Config config) throws IOException {
-        System.out.println("repo:       " + config.repo);
+        for (Target t : config.targets()) {
+            System.out.println("repo:       " + t.repo() + " (checkout " + t.checkout() + ")");
+        }
         System.out.println("acts as:    " + config.githubUser);
-        System.out.println("checkout:   " + config.checkout + " (workspace '" + config.workspace() + "')");
         System.out.println("email:      " + (config.emailEnabled() ? config.sendTo : "(off)"));
         System.out.println("checked PRs:");
         var all = StateStore.open(config.statePath()).all();

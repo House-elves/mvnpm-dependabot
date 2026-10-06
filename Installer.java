@@ -28,12 +28,15 @@ public final class Installer {
         Map<String, String> gw = readGithubWorkerConfig();
 
         Map<String, String> cfg = new LinkedHashMap<>();
-        cfg.put("REPO",         prompt(console, fallback, "Repository", "quarkusio/quarkus"));
+        cfg.put("REPOS",        prompt(console, fallback, "Repositories (comma-separated)",
+                "quarkusio/quarkus,smallrye/smallrye-open-api"));
         cfg.put("GITHUB_USER",  require(prompt(console, fallback,
                 "GitHub account that comments and approves (needs a gh login)", "phillip-kruger")));
         cfg.put("CHECKOUT",     prompt(console, fallback,
                 "The elf's own Quarkus clone (its dir name is the ~/.mavenrc workspace)",
                 home + "/Projects/quarkus-mvnpm-elf"));
+        cfg.put("CHECKOUTS_DIR", prompt(console, fallback,
+                "Where the clones of the other repos go (<name>-mvnpm-elf)", home + "/Projects"));
         cfg.put("CHROME_PATH",  prompt(console, fallback, "Chrome/Chromium binary", "/usr/bin/chromium-browser"));
         cfg.put("DEV_PORT",     prompt(console, fallback, "HTTP port for the test app", "18080"));
         cfg.put("APPROVE_MAJOR", prompt(console, fallback,

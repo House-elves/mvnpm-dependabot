@@ -19,9 +19,10 @@ public class Config {
             System.getenv().getOrDefault("XDG_STATE_HOME",
                     System.getProperty("user.home") + "/.local/state")).resolve("mvnpm-dependabot");
 
-    String repo;            // owner/name the PRs live in
+    List<String> repos;     // owner/name of each repo whose PRs are checked
     String githubUser;      // the account that comments, approves, and is mentioned
-    Path checkout;          // the elf's own clone - its dir name is the ~/.mavenrc workspace
+    Path checkout;          // the elf's own Quarkus clone - its dir name is the ~/.mavenrc workspace
+    Path checkoutsDir;      // where the clones of the other repos go (<name>-mvnpm-elf)
     String chromePath;      // chromium/chrome binary for chrome-devtools-mcp
     String agentModel;      // empty = claude CLI default
     int buildTimeoutMinutes;
@@ -56,9 +57,11 @@ public class Config {
 
         String home = System.getProperty("user.home");
         Config c = new Config();
-        c.repo                = raw.getOrDefault("REPO", "quarkusio/quarkus");
+        c.repos               = List.of(raw.getOrDefault("REPOS", raw.getOrDefault("REPO", Target.QUARKUS))
+                .split("\\s*,\\s*"));
         c.githubUser          = raw.getOrDefault("GITHUB_USER", "");
         c.checkout            = Path.of(raw.getOrDefault("CHECKOUT", home + "/Projects/quarkus-mvnpm-elf"));
+        c.checkoutsDir        = Path.of(raw.getOrDefault("CHECKOUTS_DIR", home + "/Projects"));
         c.chromePath          = raw.getOrDefault("CHROME_PATH", "/usr/bin/chromium-browser");
         c.agentModel          = raw.getOrDefault("AGENT_MODEL", "");
         c.buildTimeoutMinutes = Integer.parseInt(raw.getOrDefault("BUILD_TIMEOUT_MINUTES", "60"));
@@ -103,7 +106,15 @@ public class Config {
         return r.stdout().strip();
     }
 
-    /** The ~/.mavenrc workspace name: a checkout's directory name. */
+    /** Each configured repo with its clone: CHECKOUT for Quarkus, CHECKOUTS_DIR/<name>-mvnpm-elf otherwise. */
+    List<Target> targets() {
+        return repos.stream().map(r -> {
+            if (r.equals(Target.QUARKUS)) return new Target(r, checkout);
+            return new Target(r, checkoutsDir.resolve(r.substring(r.indexOf('/') + 1) + "-mvnpm-elf"));
+        }).toList();
+    }
+
+    /** The ~/.mavenrc workspace name of the Quarkus checkout: its directory name. */
     String workspace()  { return checkout.getFileName().toString(); }
     Path lockPath()     { return stateDir.resolve("lock"); }
     Path statePath()    { return stateDir.resolve("state.json"); }

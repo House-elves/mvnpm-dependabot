@@ -8,15 +8,16 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * The elf's own Quarkus checkout, and the builds run in it.
+ * The elf's own checkout of one watched repo, and the builds run in it.
  *
  * Isolation comes from two things. The checkout is a separate clone (not a
- * worktree of the principal's), fetching straight from quarkusio, so nothing
+ * worktree of the principal's), fetching straight from upstream, so nothing
  * here touches the principal's remotes, branches or object store. And
- * ~/.mavenrc maps every Quarkus checkout to its own local repository by
- * directory name, so the 999-SNAPSHOT built here lands in
- * ~/.m2/worktrees/<checkout dir>/repository and never overwrites a build the
- * principal is testing elsewhere.
+ * ~/.mavenrc gives it its own local repository by directory name, so what is
+ * built here lands in ~/.m2/worktrees/<checkout dir>/repository and never
+ * overwrites a build the principal is testing elsewhere. A Quarkus checkout is
+ * recognised by ~/.mavenrc itself; any other repo is pointed at its workspace
+ * with QUARKUS_WS.
  */
 final class Workspace {
 
@@ -24,27 +25,43 @@ final class Workspace {
     private static final String AUTHOR_EMAIL = "mvnpm-dependabot@house-elves.local";
 
     private final Config config;
+    private final Target target;
     private final Path dir;
     private final Path runDir;
+    private String branch;
 
-    Workspace(Config config, Path runDir) {
+    Workspace(Config config, Target target, Path runDir) {
         this.config = config;
-        this.dir = config.checkout;
+        this.target = target;
+        this.dir = target.checkout();
         this.runDir = runDir;
     }
 
     Path dir() { return dir; }
 
-    String upstream() { return "https://github.com/" + config.repo + ".git"; }
+    String upstream() { return "https://github.com/" + target.repo() + ".git"; }
 
-    /** Clones on first use, then resets to a clean upstream main. Returns main's sha. */
+    /** The upstream default branch (main for Quarkus and SmallRye, but not for every repo). */
+    String branch() throws IOException {
+        if (branch == null) {
+            for (String line : git(dir.getParent(), 2, "ls-remote", "--symref", upstream(), "HEAD").split("\n")) {
+                if (line.startsWith("ref: refs/heads/")) {
+                    branch = line.substring("ref: refs/heads/".length(), line.indexOf('\t')).strip();
+                }
+            }
+            if (branch == null) branch = "main";
+        }
+        return branch;
+    }
+
+    /** Clones on first use, then resets to a clean upstream default branch. Returns its sha. */
     String resetToMain() throws IOException {
         if (!Files.isDirectory(dir.resolve(".git"))) {
             System.out.println("cloning " + upstream() + " into " + dir + " (first run)");
             Files.createDirectories(dir.getParent());
             git(dir.getParent(), 60, "clone", "--filter=blob:none", "--no-checkout", upstream(), dir.getFileName().toString());
         }
-        git(dir, 15, "fetch", "--no-tags", upstream(), "+refs/heads/main:refs/elf/main");
+        git(dir, 15, "fetch", "--no-tags", upstream(), "+refs/heads/" + branch() + ":refs/elf/main");
         git(dir, 5, "checkout", "--force", "--detach", "refs/elf/main");
         git(dir, 5, "clean", "-fd", "--exclude=target");
         return git(dir, 1, "rev-parse", "HEAD").strip();
@@ -98,8 +115,25 @@ final class Workspace {
                 "dependency:go-offline", "-Dgo-offline", "-pl", String.join(",", modules));
     }
 
+    /**
+     * A plain Maven repo: install the modules that use the bump (and what they
+     * need) without tests, then run those modules' own tests. With no modules
+     * the whole project is built, untested. Each step's output goes to
+     * build.log.
+     */
+    Exec.Result buildModules(Collection<String> modules, boolean tests) {
+        Path log = runDir.resolve("build.log");
+        if (modules.isEmpty()) {
+            return mvn(log, config.buildTimeoutMinutes, "install", "-DskipTests");
+        }
+        String pl = String.join(",", modules);
+        var r = mvn(log, config.buildTimeoutMinutes, "install", "-DskipTests", "-pl", pl, "-am");
+        if (r.exitCode() != 0 || !tests) return r;
+        return mvn(log, config.buildTimeoutMinutes, "verify", "-pl", pl);
+    }
+
     Path repo() {
-        return Path.of(System.getProperty("user.home"), ".m2", "worktrees", config.workspace(), "repository");
+        return Path.of(System.getProperty("user.home"), ".m2", "worktrees", dir.getFileName().toString(), "repository");
     }
 
     // ---- plumbing ----
@@ -109,6 +143,7 @@ final class Workspace {
         cmd.addAll(List.of(args));
         ProcessBuilder pb = new ProcessBuilder(cmd).directory(dir.toFile());
         env(pb.environment());
+        if (!target.quarkus()) pb.environment().put("QUARKUS_WS", dir.getFileName().toString());
         appendLine(log, "\n$ " + String.join(" ", cmd));
         return Exec.runToFile(pb, log, timeoutMinutes, TimeUnit.MINUTES);
     }

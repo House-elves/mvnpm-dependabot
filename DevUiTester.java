@@ -217,6 +217,15 @@ final class DevUiTester {
 
     private Outcome drive(String label, String base, Collection<String> extensions, List<Focus> focus) {
         Path screens = runDir.resolve("screens-" + label);
+        return session(config, runDir, workspace.dir(), label, screens,
+                prompt(base, extensions, focus, screens));
+    }
+
+    /**
+     * One headless Claude session with chrome-devtools-mcp, ending in the json
+     * verdict block both prompts ask for. Shared with WebUiTester.
+     */
+    static Outcome session(Config config, Path runDir, Path sourceDir, String label, Path screens, String prompt) {
         Path mcp = runDir.resolve("mcp.json");
         try {
             Files.createDirectories(screens);
@@ -244,25 +253,25 @@ final class DevUiTester {
         // screenshots inside the client's roots. The source is an extra,
         // read-only directory.
         cmd.add("--add-dir");
-        cmd.add(workspace.dir().toString());
+        cmd.add(sourceDir.toString());
         ProcessBuilder pb = new ProcessBuilder(cmd).directory(runDir.toFile());
-        var r = Exec.run(pb, config.uiTimeoutMinutes, TimeUnit.MINUTES, prompt(base, extensions, focus, screens));
+        var r = Exec.run(pb, config.uiTimeoutMinutes, TimeUnit.MINUTES, prompt);
         try {
             Files.writeString(runDir.resolve("ui-" + label + ".json"), r.stdout());
         } catch (IOException ignored) {
             // the transcript is a convenience
         }
-        if (r.timedOut()) return Outcome.notRun("the Dev UI session timed out after " + config.uiTimeoutMinutes + " minutes");
+        if (r.timedOut()) return Outcome.notRun("the UI session timed out after " + config.uiTimeoutMinutes + " minutes");
         try {
             JsonNode out = MAPPER.readTree(r.stdout());
             if (out.path("is_error").asBoolean(false)) {
-                return Outcome.notRun("the Dev UI session failed: " + out.path("result").asText(out.path("subtype").asText()));
+                return Outcome.notRun("the UI session failed: " + out.path("result").asText(out.path("subtype").asText()));
             }
             String text = out.path("result").asText("");
             Matcher m = JSON_BLOCK.matcher(text);
             String last = null;
             while (m.find()) last = m.group(1);
-            if (last == null) return Outcome.notRun("the Dev UI session gave no verdict:\n" + text);
+            if (last == null) return Outcome.notRun("the UI session gave no verdict:\n" + text);
             JsonNode v = MAPPER.readTree(last);
             List<Page> pages = new ArrayList<>();
             v.path("pages").forEach(p -> pages.add(new Page(p.path("page").asText(),
@@ -271,13 +280,14 @@ final class DevUiTester {
                     v.path("summary").asText(""), pages, strings(v.path("consoleErrors")),
                     strings(v.path("suspects")), List.of());
         } catch (IOException e) {
-            return Outcome.notRun("unreadable Dev UI session output (" + e.getMessage() + "): "
+            return Outcome.notRun("unreadable UI session output (" + e.getMessage() + "): "
                     + (r.stdout().isBlank() ? r.stderr() : r.stdout().substring(0, Math.min(500, r.stdout().length()))));
         }
     }
 
     private String prompt(String base, Collection<String> extensions, List<Focus> focus, Path screens) {
         StringBuilder bumps = new StringBuilder();
+        if (focus.isEmpty()) bumps.append("(none: this is the base branch as it is, for comparison)\n");
         for (Focus f : focus) {
             bumps.append("- ").append(f.ga()).append(" (npm `").append(f.npm()).append("`) ")
                  .append(f.from()).append(" -> ").append(f.to()).append('\n');

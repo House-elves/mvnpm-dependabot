@@ -25,7 +25,12 @@ final class Notifier {
         long safe = checks.stream().filter(c -> c.verdict == Report.Verdict.SAFE).count();
         StringBuilder body = new StringBuilder("Hi,\n\nThe mvnpm-dependabot elf checked ")
                 .append(checks.size()).append(" Dependabot mvnpm PR(s) this morning:\n\n");
+        String repo = null;
         for (Report.Check c : checks) {
+            if (!c.target.repo().equals(repo)) {
+                repo = c.target.repo();
+                body.append("== ").append(repo).append(" ==\n\n");
+            }
             body.append(switch (c.verdict) {
                 case SAFE -> c.approve ? "[SAFE, approved]    " : "[SAFE, not approved] ";
                 case NOT_SAFE -> "[NOT SAFE]          ";

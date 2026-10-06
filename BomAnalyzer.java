@@ -115,7 +115,7 @@ final class BomAnalyzer {
         }
 
         Set<String> roots = rootsOf(ga);
-        Set<String> modules = modulesDeclaring(roots);
+        Set<String> modules = modulesDeclaring(roots, checkout.resolve("extensions"), 4);
         Set<String> js = jsImporting(roots);
         Set<String> extensions = new TreeSet<>();
         Stream.concat(modules.stream(), js.stream()).forEach(p -> extensionOf(p).ifPresent(extensions::add));
@@ -123,6 +123,26 @@ final class BomAnalyzer {
         return new Analysis(ga, pr.from(), pr.to(), pinned != null, pinned,
                 dependents.getOrDefault(ga, Set.of()).isEmpty(), isMajor(pr.from(), pr.to()),
                 constraints, changes, roots, modules, js, extensions);
+    }
+
+    /**
+     * A repo without Quarkus's BOM pins only what it uses directly, so there
+     * is no parent range to violate: just how the artifact's own dependencies
+     * moved, and which modules declare it (the ones to build and test).
+     */
+    Analysis analyzeDirect(GitHub.Pr pr) throws IOException {
+        String ga = pr.ga();
+        Map<String, String> oldDeps = toMap(deps(ga, pr.from()));
+        Map<String, String> newDeps = toMap(deps(ga, pr.to()));
+        List<DepChange> changes = new ArrayList<>();
+        Set<String> all = new TreeSet<>(oldDeps.keySet());
+        all.addAll(newDeps.keySet());
+        for (String d : all) {
+            String o = oldDeps.get(d), n = newDeps.get(d);
+            if (n == null || !n.equals(o)) changes.add(new DepChange(d, o, n, null, null));
+        }
+        return new Analysis(ga, pr.from(), pr.to(), true, pr.from(), true, isMajor(pr.from(), pr.to()),
+                List.of(), changes, Set.of(ga), modulesDeclaring(Set.of(ga), checkout, 6), Set.of(), Set.of());
     }
 
     // ---- BOM ----
@@ -165,16 +185,18 @@ final class BomAnalyzer {
 
     // ---- where the roots are used ----
 
-    private Set<String> modulesDeclaring(Set<String> roots) throws IOException {
+    private Set<String> modulesDeclaring(Set<String> roots, Path under, int depth) throws IOException {
         Set<String> out = new TreeSet<>();
-        try (Stream<Path> s = Files.walk(checkout.resolve("extensions"), 4)) {
-            for (Path pom : s.filter(p -> p.getFileName().toString().equals("pom.xml")).toList()) {
+        try (Stream<Path> s = Files.walk(under, depth)) {
+            for (Path pom : s.filter(p -> p.getFileName().toString().equals("pom.xml")
+                    && !p.toString().contains("/target/") && !p.toString().contains("/node_modules/")).toList()) {
                 String xml = Files.readString(pom);
                 for (String root : roots) {
                     String[] g = root.split(":");
                     if (xml.contains("<groupId>" + g[0] + "</groupId>")
                             && xml.contains("<artifactId>" + g[1] + "</artifactId>")) {
-                        out.add(checkout.relativize(pom.getParent()).toString());
+                        String rel = checkout.relativize(pom.getParent()).toString();
+                        out.add(rel.isEmpty() ? "." : rel);
                     }
                 }
             }
