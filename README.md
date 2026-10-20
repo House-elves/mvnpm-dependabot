@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/House-elves/elf-desk/main/docs/brand/mark.svg" width="72" alt="House Elves logo: a checkmark that ends in an elf's hat">
+
 # mvnpm-dependabot
 
 A [House Elf](https://github.com/House-elves) that does the morning round of Dependabot's [mvnpm](https://mvnpm.org) PRs on [Quarkus](https://github.com/quarkusio/quarkus) and any other repo you list (e.g. [SmallRye OpenAPI](https://github.com/smallrye/smallrye-open-api)), so the maintainer only has to make the final call.
