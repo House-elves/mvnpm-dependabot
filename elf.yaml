@@ -1,0 +1,43 @@
+# A House Elves elf: what Elf Desk needs to install, set up and run mvnpm-dependabot.
+name: mvnpm-dependabot
+description: Checks mvnpm Dependabot bumps in Quarkus repos (build, Dev UI) and says which are safe, for the GitHub tab's mvnpm lane.
+main: MvnpmDependabot.java
+config: ~/.config/mvnpm-dependabot/config
+tools: [gh, git, mvn, claude, chromium-browser]
+
+reads:
+  - The mvnpm Dependabot PRs in the repos you list, through gh.
+writes:
+  - A comment with its verdict on each PR it checks, and an approval on the ones that pass. Only when you start a check from the desk.
+
+settings:
+  - key: GITHUB_USER
+    label: GitHub account
+    help: The account it checks PRs as.
+    kind: login
+    default: ${github-user}
+  - key: REPOS
+    label: Repos it checks
+    help: Comma-separated owner/repo whose mvnpm bumps it checks.
+    kind: repos
+    default: quarkusio/quarkus
+  - key: APPROVE_MAJOR
+    label: Check major bumps too
+    help: "Off: major version bumps are left for you."
+    kind: bool
+    default: "false"
+  - key: AGENT_MODEL
+    label: Claude model
+    help: Empty for the default.
+    kind: text
+    default: ""
+
+commands:
+  round:
+    label: Check every open bump
+    args: [--once]
+  dry-run:
+    label: Check without commenting
+    args: [--once, --dry-run]
+
+dry-run: dry-run
