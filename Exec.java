@@ -17,9 +17,9 @@ import java.util.concurrent.TimeUnit;
  * A pull request whose diff crossed the buffer could never be reviewed: the
  * `git diff` was killed at 300 seconds, the null it returned was
  * indistinguishable from a genuinely empty diff, and the review declined itself
- * as "ungrounded" - every hour, forever. Observed on
- * bin-space-website#8 (2026-08-16), a 10,647-byte diff stalled at 8,196 bytes
- * written, the process parked in anon_pipe_write. Small PRs went through
+ * as "ungrounded" - every hour, forever. Observed on a 10,647-byte diff
+ * (2026-08-16) that stalled at 8,196 bytes written, the process parked in
+ * anon_pipe_write. Small PRs went through
  * untouched, which is why it read as a repo quirk rather than a bug.
  *
  * Both streams are therefore drained on their own threads, started before the

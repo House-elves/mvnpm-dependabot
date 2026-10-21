@@ -3,10 +3,9 @@
 //DEPS info.picocli:picocli:4.7.6
 //DEPS com.fasterxml.jackson.core:jackson-databind:2.17.2
 //DEPS org.apache.maven:maven-artifact:3.9.9
-//DEPS org.eclipse.angus:angus-mail:2.0.3
 //SOURCES Config.java Target.java Exec.java GitHub.java BomAnalyzer.java Workspace.java DevUiTester.java
 //SOURCES WebUiTester.java
-//SOURCES Report.java StateStore.java Notifier.java Installer.java
+//SOURCES Report.java StateStore.java Installer.java
 
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -50,8 +49,8 @@ import java.util.stream.Stream;
  *   4. starts a test app in dev mode and has a headless Claude session drive
  *      the Dev UI through chrome-devtools-mcp, bisecting when it fails
  *      (DevUiTester);
- *   5. comments on each PR as GITHUB_USER, approves the safe ones, and emails
- *      a summary.
+ *   5. comments on each PR as GITHUB_USER and approves the safe ones. What it
+ *      found is saved for Elf Desk to show; it emails nothing.
  *
  * Any other repo is a plain Maven project: the bumps are merged, the modules
  * that declare them are built and tested, and the web UI they package is
@@ -68,7 +67,7 @@ public class MvnpmDependabot implements Callable<Integer> {
     @Option(names = "--once", description = "One morning round (what the systemd timer runs).")
     boolean once;
 
-    @Option(names = "--dry-run", description = "Do everything except comment, approve or email; print the comments.")
+    @Option(names = "--dry-run", description = "Do everything except comment or approve; print the comments.")
     boolean dryRun;
 
     @Option(names = "--repo", description = "Only this repo (owner/name); defaults to every repo in REPOS.")
@@ -142,7 +141,6 @@ public class MvnpmDependabot implements Callable<Integer> {
             }
         }
         if (!all.isEmpty()) {
-            if (!dryRun) new Notifier(config).sendSummary(all, runDir.toString());
             System.out.println("run artifacts: " + runDir);
         }
         return exit;
@@ -367,7 +365,6 @@ public class MvnpmDependabot implements Callable<Integer> {
             System.out.println("repo:       " + t.repo() + " (checkout " + t.checkout() + ")");
         }
         System.out.println("acts as:    " + config.githubUser);
-        System.out.println("email:      " + (config.emailEnabled() ? config.sendTo : "(off)"));
         System.out.println("checked PRs:");
         var all = StateStore.open(config.statePath()).all();
         all.fieldNames().forEachRemaining(n -> {

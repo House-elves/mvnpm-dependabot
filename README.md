@@ -35,8 +35,8 @@ quarkus:dev on the snapshot
   |    -> fails? re-run on plain main (is main itself broken?), then each bump
   |       alone, to pin it on the right PR
   v
-5. a comment on each PR (edited in place on re-checks), an approval for the safe
-   ones, and a summary email
+5. a comment on each PR (edited in place on re-checks), and an approval for the
+   safe ones. It emails nothing: what it found shows on Elf Desk
 ```
 
 ### Other repos
@@ -58,7 +58,7 @@ own clone (CHECKOUTS_DIR/<name>-mvnpm-elf), reset to the default branch, every P
   |    Claude + chrome-devtools-mcp session; requests nothing answered are reported
   |    -> fails? the default branch alone, then each bump alone
   v
-4. comment, approval, email - as for Quarkus
+4. comment and approval - as for Quarkus
 ```
 
 A repo can have a profile in `WebUiTester.profile()`: the fixtures its UI fetches and what the session should exercise. `smallrye/smallrye-open-api` has one: its Swagger UI loads a sample OpenAPI 3.1 document from `/openapi` (tags, parameters, a request body, `$ref`'d schemas, a security scheme, a path item `$ref`), and the session expands everything, opens Authorize and runs Try it out on `GET /pets`. A repo without a profile gets a generic walk of its pages. A repo whose modules package no web UI ends at ⚠️ (build and tests only are not enough to approve).
@@ -71,7 +71,7 @@ A repo can have a profile in `WebUiTester.profile()`: the fixtures its UI fetche
 | ❌ Not safe | out of range, CI resolution fails, or the Dev UI breaks with only this bump | no |
 | ⚠️ Needs a human look | title not a single bump, merge conflict, build failure, Dev UI already broken on main, bumps only break together, the UI session didn't finish | no |
 
-The comment and the approval are posted **as `GITHUB_USER`** (the maintainer) and the approval is binding. GitHub doesn't notify you of your own @mention, which is why the summary email exists.
+The comment and the approval are posted **as `GITHUB_USER`** (the maintainer) and the approval is binding. GitHub doesn't notify you of your own @mention, so Elf Desk shows each verdict instead.
 
 A PR is checked once per head commit. When Dependabot rebases or recreates it, it is checked again and the same comment is updated.
 
@@ -89,7 +89,7 @@ The easy way: install it from [Elf Desk](https://github.com/House-elves/elf-desk
 ```bash
 jbang app install mvnpm-dependabot@House-elves/mvnpm-dependabot
 
-# Interactive setup - account, checkout path, email, schedule
+# Interactive setup - account, checkout path, schedule
 mvnpm-dependabot --install
 
 systemctl --user daemon-reload
@@ -101,7 +101,7 @@ Prerequisites: Java 21+, JBang, Maven, `gh` logged in as `GITHUB_USER` (`gh auth
 ## Usage
 
 ```bash
-mvnpm-dependabot --dry-run             # everything except commenting/approving/emailing; prints the comments
+mvnpm-dependabot --dry-run             # everything except commenting/approving; prints the comments
 mvnpm-dependabot --pr 56903 --dry-run  # specific PRs (any state) of the first repo in REPOS, even if already checked
 mvnpm-dependabot --repo smallrye/smallrye-open-api --pr 2696 --dry-run   # ... of another repo
 mvnpm-dependabot --repo smallrye/smallrye-open-api --once                # just one repo
@@ -130,7 +130,6 @@ Stored in `~/.config/mvnpm-dependabot/config`:
 | `AGENT_MODEL` | CLI default | Claude model for the Dev UI session |
 | `BUILD_TIMEOUT_MINUTES` | `60` | Per Maven build |
 | `UI_TIMEOUT_MINUTES` | `25` | Per Dev UI session |
-| `GMAIL_ADDRESS` / `GMAIL_AUTH_USER` / `GMAIL_APP_PASSWORD` / `SEND_TO` | - | Summary email; blank `GMAIL_ADDRESS` turns it off. The password may be `sm://secret-name` (GCP Secret Manager, as in github-worker) |
 | `STATE_DIR` | `~/.local/state/mvnpm-dependabot` | State, POM cache, test app, runs |
 
 ## License

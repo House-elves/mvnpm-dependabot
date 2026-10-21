@@ -5,15 +5,12 @@ import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
  * Interactive setup, same shape as session-worker's: prompts, writes
  * ~/.config/mvnpm-dependabot/config (0600), writes systemd user units.
- * Gmail settings default to github-worker's, so an existing sm:// secret
- * reference is reused instead of copying a password.
  */
 public final class Installer {
 
@@ -25,7 +22,6 @@ public final class Installer {
                 ? new BufferedReader(new InputStreamReader(System.in))
                 : null;
         String home = System.getProperty("user.home");
-        Map<String, String> gw = readGithubWorkerConfig();
 
         Map<String, String> cfg = new LinkedHashMap<>();
         cfg.put("REPOS",        prompt(console, fallback, "Repositories (comma-separated)",
@@ -42,15 +38,6 @@ public final class Installer {
         cfg.put("APPROVE_MAJOR", prompt(console, fallback,
                 "Approve passing MAJOR bumps of root libraries too? (true/false)", "false"));
         cfg.put("AGENT_MODEL",  prompt(console, fallback, "Claude model for the Dev UI test (blank = CLI default)", ""));
-        cfg.put("GMAIL_ADDRESS", prompt(console, fallback,
-                "Summary email From (blank = no email)", gw.getOrDefault("GMAIL_ADDRESS", "")));
-        if (!cfg.get("GMAIL_ADDRESS").isEmpty()) {
-            cfg.put("GMAIL_AUTH_USER", prompt(console, fallback, "Gmail SMTP auth user",
-                    gw.getOrDefault("GMAIL_AUTH_USER", cfg.get("GMAIL_ADDRESS"))));
-            cfg.put("GMAIL_APP_PASSWORD", prompt(console, fallback, "Gmail app password (or sm://secret-name)",
-                    gw.getOrDefault("GMAIL_APP_PASSWORD", "")));
-            cfg.put("SEND_TO", prompt(console, fallback, "Send summary to", gw.getOrDefault("SEND_TO", "")));
-        }
         String schedule = prompt(console, fallback, "Schedule (systemd OnCalendar)", "*-*-* 06:00:00");
 
         try {
@@ -62,20 +49,6 @@ public final class Installer {
             System.err.println("install failed: " + e.getMessage());
             System.exit(1);
         }
-    }
-
-    private static Map<String, String> readGithubWorkerConfig() {
-        Map<String, String> m = new HashMap<>();
-        Path p = Path.of(System.getProperty("user.home"), ".config", "github-worker", "config");
-        try {
-            for (String line : Files.readAllLines(p)) {
-                int eq = line.indexOf('=');
-                if (eq > 0 && !line.strip().startsWith("#")) m.put(line.substring(0, eq).strip(), line.substring(eq + 1).strip());
-            }
-        } catch (IOException ignored) {
-            // no github-worker here; no defaults
-        }
-        return m;
     }
 
     private static void writeConfig(Map<String, String> cfg) throws IOException {

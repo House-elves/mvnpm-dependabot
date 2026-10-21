@@ -7,9 +7,8 @@ import java.util.Map;
 
 /**
  * KEY=VALUE config at ~/.config/mvnpm-dependabot/config, same shape as the
- * other elves. No secrets need to live here: the GitHub token is read from
- * gh's keyring for GITHUB_USER at run time, and the Gmail app password may be
- * an sm:// reference (as in github-worker) or left empty to skip the email.
+ * other elves. No secrets live here: the GitHub token is read from gh's
+ * keyring for GITHUB_USER at run time.
  */
 public class Config {
 
@@ -30,10 +29,6 @@ public class Config {
     int devPort;
     boolean approveMajor;   // approve a passing major bump of a root library, or leave it to the principal
     List<String> baseExtensions;
-    String gmailAddress;
-    String gmailAuthUser;
-    String gmailAppPassword;
-    String sendTo;
     Path stateDir;
 
     static Config load() {
@@ -70,10 +65,6 @@ public class Config {
         c.approveMajor        = Boolean.parseBoolean(raw.getOrDefault("APPROVE_MAJOR", "false"));
         c.baseExtensions      = List.of(raw.getOrDefault("BASE_EXTENSIONS",
                 "rest-jackson,smallrye-openapi,smallrye-health,scheduler,hibernate-validator").split("\\s*,\\s*"));
-        c.gmailAddress        = raw.getOrDefault("GMAIL_ADDRESS", "");
-        c.gmailAuthUser       = raw.getOrDefault("GMAIL_AUTH_USER", c.gmailAddress);
-        c.gmailAppPassword    = resolveSecret(raw.getOrDefault("GMAIL_APP_PASSWORD", ""));
-        c.sendTo              = raw.getOrDefault("SEND_TO", "");
         c.stateDir            = Path.of(raw.getOrDefault("STATE_DIR", STATE_DIR_DEFAULT.toString()));
         return c;
     }
@@ -83,27 +74,6 @@ public class Config {
             System.err.println("Error: GITHUB_USER not configured in " + CONFIG_PATH);
             System.exit(1);
         }
-    }
-
-    boolean emailEnabled() {
-        return !gmailAddress.isEmpty() && !gmailAppPassword.isEmpty() && !sendTo.isEmpty();
-    }
-
-    /** Prefix marking a config value that lives in GCP Secret Manager - same convention as github-worker. */
-    static final String SECRET_PREFIX = "sm://";
-    static final String SECRET_PROJECT = "bin-space-microservices";
-
-    /** Resolves sm://name via gcloud; fails loudly rather than mailing with an empty password. */
-    private static String resolveSecret(String value) {
-        if (!value.startsWith(SECRET_PREFIX)) return value;
-        String name = value.substring(SECRET_PREFIX.length()).strip();
-        var r = Exec.run(new ProcessBuilder("gcloud", "secrets", "versions", "access", "latest",
-                "--secret=" + name, "--project=" + SECRET_PROJECT), 60, java.util.concurrent.TimeUnit.SECONDS);
-        if (r.exitCode() != 0) {
-            System.err.println("Failed to resolve " + value + " from Secret Manager: " + r.stderr());
-            System.exit(1);
-        }
-        return r.stdout().strip();
     }
 
     /** Each configured repo with its clone: CHECKOUT for Quarkus, CHECKOUTS_DIR/<name>-mvnpm-elf otherwise. */
