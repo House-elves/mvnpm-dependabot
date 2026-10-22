@@ -1,6 +1,8 @@
 # A House Elves elf: what Elf Desk needs to install, set up and run mvnpm-dependabot.
 name: mvnpm-dependabot
 title: mvnpm
+version: 1.0.0
+author: "@phillip-kruger"
 description: Checks mvnpm Dependabot bumps in Quarkus repos (build, Dev UI) and says which are safe, for the GitHub tab's mvnpm lane.
 main: MvnpmDependabot.java
 config: ~/.config/mvnpm-dependabot/config
