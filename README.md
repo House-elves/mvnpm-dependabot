@@ -36,7 +36,7 @@ quarkus:dev on the snapshot
   |       alone, to pin it on the right PR
   v
 5. a comment on each PR (edited in place on re-checks), and an approval for the
-   safe ones. It emails nothing: what it found shows on Elf Desk
+   safe ones. It emails nothing: what it found shows on its tab in Elf Desk
 ```
 
 ### Other repos
@@ -75,6 +75,35 @@ The comment and the approval are posted **as `GITHUB_USER`** (the maintainer) an
 
 A PR is checked once per head commit. When Dependabot rebases or recreates it, it is checked again and the same comment is updated.
 
+## Its tab
+
+On [Elf Desk](https://github.com/House-elves/elf-desk) it has a tab of its own, **mvnpm**, and a card on the dashboard
+(how many bumps, how many are safe to merge, and a mark when one is your move). The tab lists every open Dependabot
+mvnpm bump in `REPOS`, by whose move it is: the PR, its repo, the version bump, the elf's verdict, CI, and the next
+step, as the GitHub elf's board drew its mvnpm lane before.
+
+- **Refresh** reads the bumps from GitHub (the `board` command: one search per repo, one call at a time). It also runs
+  every 15 minutes on weekdays, 07:00 to 19:00.
+- **Check every open bump** runs the round (what the timer runs); **Check this one** checks one PR now, even if it was
+  checked before. While a check runs, the tab says which.
+- **Approve CI run**, **Merge** and **Ask Dependabot to rebase** write to GitHub as `GITHUB_USER`, and only after you
+  click in the desk's confirm bar. Merge is pinned to the head the tab showed, uses the merge method the repo allows,
+  and is refused unless the elf found the bump safe at that head and CI is green.
+
+A check builds Quarkus. On Linux the elf runs it in a systemd user unit of its own (`systemd-run --user`, niced, up
+to 4 hours) and waits for it, so the build isn't held to the House Elves runner's memory limit, and the desk still
+shows the check running. On macOS it runs in the elf itself.
+
+The tab reads `~/.config/mvnpm-dependabot/board/board.json` and `state/` next to it: `state.json` (the verdicts),
+`running.json` (the check running now) and `rebasing.json` (the rebases you asked for). An older install's
+`~/.local/state/mvnpm-dependabot/state.json` is copied there once and left where it was.
+
+| Command | What |
+|---|---|
+| `--board` | read the open bumps from GitHub and write the board |
+| `--repo quarkus --pr 57654` | check one PR (`--repo` takes owner/name or the name alone) |
+| `--action=approve-ci\|merge\|dependabot-rebase` | a button's write, its values (`repo`, `pr`, and `headSha` for merge) as JSON on stdin |
+
 ## Isolation
 
 - **Its own clone**, not a worktree of yours: it fetches straight from `quarkusio/quarkus` into `refs/elf/*` and never touches your remotes or branches.
@@ -84,7 +113,7 @@ A PR is checked once per head commit. When Dependabot rebases or recreates it, i
 
 ## Install
 
-The easy way: add it in [Elf Desk](https://github.com/House-elves/elf-desk) with the **+** after the last tab; its settings are on that page too. The desk reads [`elf.yaml`](elf.yaml), asks for the settings and starts checks from the GitHub tab's mvnpm lane (Linux only for now). The steps below set it up by hand, without the desk.
+The easy way: add it in [Elf Desk](https://github.com/House-elves/elf-desk) with the **+** after the last tab; its settings are on that page too. The desk reads [`elf.yaml`](elf.yaml), asks for the settings and shows the elf's own tab. The steps below set it up by hand, without the desk.
 
 ```bash
 jbang app install mvnpm-dependabot@House-elves/mvnpm-dependabot
@@ -130,7 +159,13 @@ Stored in `~/.config/mvnpm-dependabot/config`:
 | `AGENT_MODEL` | CLI default | Claude model for the Dev UI session |
 | `BUILD_TIMEOUT_MINUTES` | `60` | Per Maven build |
 | `UI_TIMEOUT_MINUTES` | `25` | Per Dev UI session |
-| `STATE_DIR` | `~/.local/state/mvnpm-dependabot` | State, POM cache, test app, runs |
+| `STATE_DIR` | - | One folder for the verdicts, POM cache, test app and runs. Unset: the verdicts in `~/.config/mvnpm-dependabot/state`, the rest in `~/.local/state/mvnpm-dependabot` |
+
+## Tests
+
+```bash
+mvn test   # the board's rules, the merge's checks, the writes allowed, the state's move, the unit's command
+```
 
 ## License
 

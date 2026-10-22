@@ -1,17 +1,19 @@
 # A House Elves elf: what Elf Desk needs to install, set up and run mvnpm-dependabot.
 name: mvnpm-dependabot
 title: mvnpm
-version: 1.0.0
+version: 1.1.0
 author: "@phillip-kruger"
-description: Checks mvnpm Dependabot bumps in Quarkus repos (build, Dev UI) and says which are safe, for the GitHub tab's mvnpm lane.
+description: Checks mvnpm Dependabot bumps in Quarkus repos (build, Dev UI) and says which are safe. It has its own tab, where you check, approve CI, rebase and merge them.
 main: MvnpmDependabot.java
 config: ~/.config/mvnpm-dependabot/config
 tools: [gh, git, mvn, claude, chromium-browser]
 
 reads:
-  - The mvnpm Dependabot PRs in the repos you list, through gh.
+  - The open mvnpm Dependabot PRs in the repos you list, with their CI, reviews and merge state, through gh as your account.
 writes:
-  - A comment with its verdict on each PR it checks, and an approval on the ones that pass. Only when you start a check from the desk.
+  - Its verdicts, its board and which check runs, in ~/.config/mvnpm-dependabot/.
+  - A comment with its verdict on each PR it checks, and an approval on the ones that pass. Only when you start a check or the round from the desk.
+  - On GitHub, only when you click and confirm it in the desk's bar, as your account - approving a PR's CI runs, a merge pinned to the head you saw (when it found the bump safe and CI is green), and the comment "@dependabot rebase".
 
 settings:
   - key: GITHUB_USER
@@ -36,11 +38,60 @@ settings:
     default: ""
 
 commands:
+  board:
+    label: Refresh
+    args: [--board]
   round:
     label: Check every open bump
     args: [--once]
+  check:
+    label: Check this one
+    args: []
+    params:
+      # The repo's name alone (quarkus, smallrye-open-api): a command's values can't hold a "/". The elf finds it in REPOS.
+      repo: {pattern: '[A-Za-z0-9._-]{1,80}'}
+      pr: {pattern: '[0-9]{1,7}'}
   dry-run:
     label: Check without commenting
     args: [--once, --dry-run]
 
 dry-run: dry-run
+
+# Its tab (and dashboard card), drawn by ui/mvnpm.js in the desk's sandboxed frame, from board/board.json and
+# state/running.json. A check builds Quarkus: on Linux it runs in a systemd user unit of its own, which the elf waits for.
+tab:
+  page: ui/mvnpm.js
+  card: true
+# Every 15 minutes on weekdays, 07:00 to 19:00.
+refresh:
+  command: board
+  schedule: "Mon..Fri *-*-* 7..19:00; Mon..Fri *-*-* 7..18:15; Mon..Fri *-*-* 7..18:30; Mon..Fri *-*-* 7..18:45"
+data: [board, state]
+
+# Writes to GitHub, from the tab's buttons: each waits for your click in the desk's bar. A PR is owner/repo and its number.
+actions:
+  approve-ci:
+    label: Approve CI to run
+    args: [--action=approve-ci]
+    ask: true
+    confirm: "Approve the workflow runs waiting on {repo}#{pr}, so its CI runs?"
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+  merge:
+    label: Merge a safe, green bump
+    args: [--action=merge]
+    ask: true
+    confirm: "Merge {repo}#{pr} on GitHub, at the head you saw?"
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+      headSha: {pattern: '[0-9a-f]{40}', max: 40}
+  dependabot-rebase:
+    label: Ask Dependabot to rebase
+    args: [--action=dependabot-rebase]
+    ask: true
+    confirm: "Comment \"@dependabot rebase\" on {repo}#{pr}, as you?"
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
