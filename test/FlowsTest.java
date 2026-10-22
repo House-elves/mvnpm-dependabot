@@ -52,6 +52,18 @@ class FlowsTest {
     }
 
     @Test
+    void ciWaitingForApprovalCanBeApprovedBeforeTheNewCommitIsChecked() {
+        // quarkusio/quarkus#57654: Dependabot rebased it, so its check is at an older head, and CI waits for you.
+        Bumps.Pr bump = Prs.bump(Bumps.AWAITING_APPROVAL, "BLOCKED", "MERGEABLE", false);
+        Flows.Flow f = Flows.flow(bump, new Flows.Ctx(new Board.Check("older", "SAFE", true, null, NOW), false, false, NOW, null));
+        is(f, Flows.YOU, 0, "check");
+        assertEquals(List.of("approve-ci"), ids(f.more()));
+        assertEquals("Not checked at this commit. CI waits for you to approve the run.", f.say());
+        // While it's being checked, nothing else.
+        assertEquals(List.of(), ids(Flows.flow(bump, new Flows.Ctx(null, true, true, NOW, null)).more()));
+    }
+
+    @Test
     void notCheckedOrCheckedAtAnOlderHeadIsCheckedFirst() {
         Bumps.Pr bump = Prs.bump("SUCCESS", "CLEAN", "MERGEABLE", true);
         Flows.Flow never = Flows.flow(bump, ctx(bump, null));

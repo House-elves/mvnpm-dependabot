@@ -73,8 +73,21 @@ final class Flows {
         return asked.at();
     }
 
-    /** A Dependabot mvnpm bump: the elf checks it, then you merge it (or close it). */
+    /**
+     * A Dependabot mvnpm bump: the elf checks it, then you merge it (or close it). CI waiting for approval can always
+     * be approved, checked or not: a new commit (Dependabot's rebase) needs its runs approved before it's checked again.
+     */
     static Flow mvnpm(Bumps.Pr i, Ctx c) {
+        Flow f = mvnpmState(i, c);
+        boolean offered = f.next() != null && f.next().id().equals("approve-ci") || f.more().stream().anyMatch(n -> n.id().equals("approve-ci"));
+        if (!Bumps.AWAITING_APPROVAL.equals(i.ci()) || c.checking() || offered) return f;
+        List<Next> more = new java.util.ArrayList<>();
+        more.add(new Next("approve-ci", "Approve CI run"));
+        more.addAll(f.more());
+        return f.with(f.waiting(), f.since(), f.say() + " CI waits for you to approve the run.", f.next(), List.copyOf(more));
+    }
+
+    private static Flow mvnpmState(Bumps.Pr i, Ctx c) {
         Board.Check r = c.check();
         if (c.checking()) return flow(0, AGENT, c.now(), "mvnpm-dependabot is checking it.", null, List.of());
         if (r == null || !c.current()) {
