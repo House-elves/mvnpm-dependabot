@@ -84,7 +84,7 @@ A PR is checked once per head commit. When Dependabot rebases or recreates it, i
 
 ## Install
 
-The easy way: install it from [Elf Desk](https://github.com/House-elves/elf-desk)'s **Elves** page. The desk reads [`elf.yaml`](elf.yaml), asks for the settings and starts checks from the GitHub tab's mvnpm lane (Linux only for now). The steps below set it up by hand, without the desk.
+The easy way: add it in [Elf Desk](https://github.com/House-elves/elf-desk) with the **+** after the last tab; its settings are on that page too. The desk reads [`elf.yaml`](elf.yaml), asks for the settings and starts checks from the GitHub tab's mvnpm lane (Linux only for now). The steps below set it up by hand, without the desk.
 
 ```bash
 jbang app install mvnpm-dependabot@House-elves/mvnpm-dependabot
