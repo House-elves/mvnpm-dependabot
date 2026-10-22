@@ -43,6 +43,7 @@ public final class Installer {
         try {
             writeConfig(cfg);
             Files.createDirectories(Config.STATE_DIR_DEFAULT);
+            Files.createDirectories(Config.WORK_DIR_DEFAULT);
             writeSystemd(schedule);
             printNextSteps();
         } catch (IOException e) {

@@ -59,7 +59,7 @@ final class DevUiTester {
 
     /** Creates the app (with these extensions) and runs one Dev UI session against it. */
     Outcome test(String label, Collection<String> extensions, List<Focus> focus) {
-        Path appsDir = config.stateDir.resolve("apps");
+        Path appsDir = config.workDir.resolve("apps");
         Path app = appsDir.resolve("devui-check");
         try {
             createApp(appsDir, app, extensions);
