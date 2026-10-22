@@ -2,10 +2,12 @@
 //JAVA 21+
 //DEPS info.picocli:picocli:4.7.6
 //DEPS com.fasterxml.jackson.core:jackson-databind:2.17.2
+//DEPS com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.17.2
 //DEPS org.apache.maven:maven-artifact:3.9.9
 //SOURCES Config.java Target.java Exec.java GitHub.java BomAnalyzer.java Workspace.java DevUiTester.java
 //SOURCES WebUiTester.java
 //SOURCES Report.java StateStore.java Installer.java
+//SOURCES Bumps.java Flows.java Board.java Running.java Units.java Actions.java
 
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -56,8 +58,14 @@ import java.util.stream.Stream;
  * that declare them are built and tested, and the web UI they package is
  * served and driven the same way (WebUiTester). Steps 5 and the bisecting are
  * shared.
+ *
+ * For Elf Desk it also keeps the mvnpm tab's board (--board: the open bumps,
+ * read from GitHub, with the verdicts), and does what the tab's buttons ask
+ * (--action=NAME: approve CI, merge, ask Dependabot to rebase), each after
+ * you confirm it in the desk's bar. A check started from the desk runs in a
+ * systemd user unit of its own on Linux (Units), so its build has the memory.
  */
-@Command(name = "mvnpm-dependabot", mixinStandardHelpOptions = true, version = "1.0.0",
+@Command(name = "mvnpm-dependabot", mixinStandardHelpOptions = true, version = "1.1.0",
         description = "Validates Dependabot mvnpm PRs: BOM ranges, CI resolution, snapshot build, Dev UI test.")
 public class MvnpmDependabot implements Callable<Integer> {
 
@@ -70,7 +78,14 @@ public class MvnpmDependabot implements Callable<Integer> {
     @Option(names = "--dry-run", description = "Do everything except comment or approve; print the comments.")
     boolean dryRun;
 
-    @Option(names = "--repo", description = "Only this repo (owner/name); defaults to every repo in REPOS.")
+    @Option(names = "--board", description = "Read the open mvnpm bumps from GitHub and write the tab's board.")
+    boolean board;
+
+    @Option(names = "--action", description = "One of the tab's actions (approve-ci, merge, dependabot-rebase), "
+            + "its values as JSON on stdin.")
+    String action;
+
+    @Option(names = "--repo", description = "Only this repo (owner/name, or its name alone); defaults to every repo in REPOS.")
     String repoOption;
 
     @Option(names = "--pr", description = "Check only these PR numbers (repeatable), even if already checked. "
@@ -102,24 +117,61 @@ public class MvnpmDependabot implements Callable<Integer> {
             printStatus(config);
             return 0;
         }
+        if (action != null) return Actions.run(config, action);
+        if (board) return Board.refresh(config);
+        if (repoOption != null) {
+            String repo = config.repo(repoOption);
+            if (repo == null) {
+                System.err.println(repoOption + " is not in REPOS " + config.repos);
+                return 1;
+            }
+            repoOption = repo;
+        }
+        // Inside its unit: the parent holds the lock and says what runs.
+        if (Units.inUnit()) return checkNow(config);
 
         try (var lock = SingleInstanceLock.tryAcquire(config.lockPath())) {
             if (lock == null) {
-                System.err.println("another mvnpm-dependabot is running; exiting");
-                return 0;
-            }
-            if (!waitForNetwork()) {
-                System.err.println("no network after waiting; exiting");
+                System.err.println("another mvnpm-dependabot check is running; wait for it to finish");
                 return 1;
             }
-            return round(config);
+            Running running = running(config);
+            running.write(config.runningPath());
+            Board.rejoin(config);
+            try {
+                return Units.available() ? Units.run(running) : checkNow(config);
+            } finally {
+                Running.clear(config.runningPath());
+                // The new verdicts on the board, with what GitHub says now (the check commented and approved).
+                try {
+                    Board.refresh(config);
+                } catch (IOException e) {
+                    Board.rejoin(config);
+                }
+            }
         }
+    }
+
+    /** What this run checks, for state/running.json and its unit's name. */
+    private Running running(Config config) {
+        String kind = dryRun && prNumbers.isEmpty() ? "dry-run" : prNumbers.isEmpty() ? "round" : "check";
+        String repo = kind.equals("check") && repoOption == null ? config.repos.get(0) : repoOption;
+        Running r = new Running(kind, repo, List.copyOf(prNumbers), java.time.Instant.now(), null);
+        return Units.available() ? new Running(kind, repo, r.prs(), r.since(), Units.name(r)) : r;
+    }
+
+    private int checkNow(Config config) throws IOException {
+        if (!waitForNetwork()) {
+            System.err.println("no network after waiting; exiting");
+            return 1;
+        }
+        return round(config);
     }
 
     private int round(Config config) throws IOException {
         List<Target> targets = config.targets();
         if (repoOption != null) {
-            targets = targets.stream().filter(t -> t.repo().equals(repoOption)).toList();
+            targets = targets.stream().filter(t -> t.repo().equalsIgnoreCase(repoOption)).toList();
             if (targets.isEmpty()) {
                 System.err.println(repoOption + " is not in REPOS " + config.repos);
                 return 1;

@@ -13,6 +13,10 @@ import java.util.regex.Pattern;
  * The gh CLI, always as GITHUB_USER. The token comes from gh's own keyring
  * (`gh auth token -u`) and is passed per command as GH_TOKEN, so the elf never
  * switches the host's active gh account out from under the principal.
+ *
+ * Every call waits for the one before it: GitHub asks for a user's requests to
+ * be made one at a time, and several at once trip its secondary rate limit
+ * (the GitHub elf's board learned this with a 403 that lasted minutes).
  */
 final class GitHub {
 
@@ -20,7 +24,8 @@ final class GitHub {
     static final String MARKER = "<!-- mvnpm-dependabot -->";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final Pattern BUMP = Pattern.compile(
+    private static final Object ONE_AT_A_TIME = new Object();
+    static final Pattern BUMP = Pattern.compile(
             "Bump ([\\w.-]+):([\\w.-]+) from (\\S+) to (\\S+)");
 
     record Pr(int number, String title, String branch, String sha, String url,
@@ -113,6 +118,115 @@ final class GitHub {
                 "--approve", "--body-file", "-");
     }
 
+    // ---- the tab: its board, and the writes behind its buttons ----
+
+    /** What the board reads of a PR (see {@link Bumps#pr}). */
+    static final String PR_FIELDS = """
+            number title url state createdAt updatedAt isDraft headRefName headRefOid reviewDecision mergeable mergeStateStatus
+            author { login }
+            latestOpinionatedReviews(first: 20, writersOnly: true) { nodes { state } }
+            commits(last: 1) { nodes { commit {
+              statusCheckRollup { state contexts(first: 1) { checkRunCountsByState { state count } statusContextCountsByState { state count } } }
+              status { state }
+              checkSuites(first: 30) { nodes { conclusion workflowRun { databaseId workflow { databaseId }
+                pendingDeploymentRequests(first: 3) { nodes { currentUserCanApprove environment { databaseId } } } } } }
+            } } }
+            """;
+
+    private static final String OPEN_PRS = """
+            query($q: String!, $after: String) {
+              search(query: $q, type: ISSUE, first: 50, after: $after) {
+                pageInfo { hasNextPage endCursor }
+                nodes { ... on PullRequest { %s } }
+              }
+            }
+            """.formatted(PR_FIELDS);
+
+    private static final String PULL = """
+            query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) {
+                mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed viewerDefaultMergeMethod
+                pullRequest(number: $number) { %s }
+              }
+            }
+            """.formatted(PR_FIELDS);
+
+    /** Open Dependabot PRs of the repo, as GraphQL nodes (the mvnpm ones are picked by {@link Bumps#isMvnpmBump}). */
+    List<JsonNode> openDependabotPrs() throws IOException {
+        List<JsonNode> out = new ArrayList<>();
+        String after = null;
+        for (int page = 0; page < 6; page++) {
+            List<String> args = new ArrayList<>(List.of("api", "graphql", "-f", "query=" + OPEN_PRS,
+                    "-f", "q=is:open is:pr author:app/dependabot repo:" + repo));
+            if (after != null) args.addAll(List.of("-f", "after=" + after));
+            JsonNode search = graphql(args).path("search");
+            search.path("nodes").forEach(out::add);
+            JsonNode info = search.path("pageInfo");
+            String next = info.path("hasNextPage").asBoolean() ? info.path("endCursor").asText(null) : null;
+            if (next == null || next.equals(after) || search.path("nodes").isEmpty()) break;
+            after = next;
+        }
+        return out;
+    }
+
+    /** One PR now, with what its repo allows for merging: the repository node, its pullRequest inside. */
+    JsonNode pull(int number) throws IOException {
+        String[] r = repo.split("/", 2);
+        return graphql(List.of("api", "graphql", "-f", "query=" + PULL, "-f", "owner=" + r[0], "-f", "name=" + r[1],
+                "-F", "number=" + number)).path("repository");
+    }
+
+    static final String REPO_PATH = "/repos/[A-Za-z0-9-]+/[A-Za-z0-9._-]+";
+    static final Pattern APPROVE_RUN = Pattern.compile(REPO_PATH + "/actions/runs/\\d+/approve");
+    static final Pattern PENDING_DEPLOYMENTS = Pattern.compile(REPO_PATH + "/actions/runs/\\d+/pending_deployments");
+    static final Pattern MERGE = Pattern.compile(REPO_PATH + "/pulls/\\d+/merge");
+    static final Pattern COMMENT = Pattern.compile(REPO_PATH + "/issues/\\d+/comments");
+    static final Pattern SHA = Pattern.compile("[0-9a-f]{40}");
+    static final String REBASE = "@dependabot rebase";
+
+    /**
+     * The only writes the tab's buttons make, as the GitHub elf's GitHubWriter
+     * allows them: approving workflow runs (a fork's "Approve and run", or a run
+     * held at deployment environments you review: approve only, no comment), a
+     * merge pinned to a head commit, and the one comment "@dependabot rebase".
+     * Always in this client's repo.
+     */
+    static boolean allowedWrite(String repo, String method, String path, JsonNode body) {
+        if (!path.startsWith("/repos/" + repo + "/")) return false;
+        return switch (method) {
+            case "POST" -> (APPROVE_RUN.matcher(path).matches() && body.isObject() && body.isEmpty())
+                    || (PENDING_DEPLOYMENTS.matcher(path).matches() && body.size() == 3
+                            && body.path("state").asText().equals("approved") && body.path("comment").asText("-").isEmpty()
+                            && body.path("environment_ids").isArray() && body.path("environment_ids").size() >= 1
+                            && body.path("environment_ids").size() <= 3
+                            && java.util.stream.StreamSupport.stream(body.path("environment_ids").spliterator(), false)
+                                    .allMatch(JsonNode::isIntegralNumber))
+                    || (COMMENT.matcher(path).matches() && body.size() == 1 && REBASE.equals(body.path("body").asText()));
+            case "PUT" -> MERGE.matcher(path).matches() && body.size() == 2
+                    && List.of("merge", "squash", "rebase").contains(body.path("merge_method").asText())
+                    && SHA.matcher(body.path("sha").asText()).matches();
+            default -> false;
+        };
+    }
+
+    /** One of the writes {@link #allowedWrite} allows, as GITHUB_USER; anything else is refused before gh runs. */
+    JsonNode write(String method, String path, JsonNode body) throws IOException {
+        if (!allowedWrite(repo, method, path, body)) {
+            throw new IOException("mvnpm-dependabot only approves CI runs, merges at a head and asks Dependabot to rebase;"
+                    + " refused " + method + " " + path);
+        }
+        return json(ghStdin(MAPPER.writeValueAsString(body), "api", "-X", method, path.substring(1), "--input", "-"));
+    }
+
+    private JsonNode graphql(List<String> args) throws IOException {
+        JsonNode res = json(gh(args.toArray(String[]::new)));
+        JsonNode errors = res.path("errors");
+        if (errors.isArray() && !errors.isEmpty() && (res.path("data").isMissingNode() || res.path("data").isNull())) {
+            throw new IOException("GitHub: " + errors.path(0).path("message").asText("GraphQL error"));
+        }
+        return res.path("data");
+    }
+
     // ---- plumbing ----
 
     private String token() throws IOException {
@@ -140,7 +254,10 @@ final class GitHub {
         Map<String, String> env = pb.environment();
         env.put("GH_TOKEN", token());
         env.put("GH_PROMPT_DISABLED", "1");
-        var r = Exec.run(pb, 2, TimeUnit.MINUTES, stdin);
+        Exec.Result r;
+        synchronized (ONE_AT_A_TIME) {
+            r = Exec.run(pb, 2, TimeUnit.MINUTES, stdin);
+        }
         if (r.exitCode() != 0) {
             throw new IOException("gh " + String.join(" ", args.length > 3 ? List.of(args).subList(0, 3) : List.of(args))
                     + " failed: " + (r.timedOut() ? "timed out" : r.stderr()));
