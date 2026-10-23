@@ -169,6 +169,82 @@ final class GitHub {
         return out;
     }
 
+    private static final String CI = """
+            query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) {
+                viewerPermission
+                pullRequest(number: $number) {
+                  headRefOid
+                  commits(last: 1) { nodes { commit {
+                    status { contexts { context state targetUrl } }
+                    checkSuites(first: 50) { nodes {
+                      app { slug }
+                      status
+                      workflowRun { databaseId workflow { databaseId name } }
+                      checkRuns(first: 50, filterBy: { checkType: LATEST,
+                          conclusions: [FAILURE, TIMED_OUT, CANCELLED, STARTUP_FAILURE, ACTION_REQUIRED] }) {
+                        nodes { name conclusion detailsUrl }
+                      }
+                    } }
+                  } } }
+                }
+              }
+            }
+            """;
+
+    /**
+     * What failed on the PR's head, as the GitHub elf's CI menu shows it: {headSha, failed: [{name, conclusion, url}],
+     * runs: the failed GitHub Actions workflow runs (the newest of each workflow) whose failed jobs can be re-run,
+     * canRerun: you have write access, which GitHub needs for that, running: the workflows running again now}.
+     */
+    com.fasterxml.jackson.databind.node.ObjectNode ci(int number) throws IOException {
+        String[] r = repo.split("/", 2);
+        JsonNode repository = graphql(List.of("api", "graphql", "-f", "query=" + CI, "-f", "owner=" + r[0], "-f", "name=" + r[1],
+                "-F", "number=" + number)).path("repository");
+        JsonNode pr = repository.path("pullRequest");
+        if (!pr.isObject()) throw new IOException(repo + "#" + number + " isn't a pull request");
+        JsonNode commit = pr.path("commits").path("nodes").path(0).path("commit");
+        // A workflow run again replaces the one before it: only the newest run of each workflow counts.
+        Map<Long, Long> newest = new java.util.HashMap<>();
+        for (JsonNode suite : commit.path("checkSuites").path("nodes")) {
+            JsonNode run = suite.path("workflowRun");
+            if (run.path("databaseId").isNumber() && run.path("workflow").path("databaseId").isNumber()) {
+                newest.merge(run.path("workflow").path("databaseId").asLong(), run.path("databaseId").asLong(), Math::max);
+            }
+        }
+        var out = MAPPER.createObjectNode().put("headSha", pr.path("headRefOid").asText());
+        var failed = out.putArray("failed");
+        java.util.Set<Long> runs = new java.util.LinkedHashSet<>();
+        java.util.Set<String> running = new java.util.TreeSet<>();
+        for (JsonNode suite : commit.path("checkSuites").path("nodes")) {
+            JsonNode run = suite.path("workflowRun");
+            Long id = run.path("databaseId").isNumber() ? run.path("databaseId").asLong() : null;
+            if (id != null && run.path("workflow").path("databaseId").isNumber()
+                    && !id.equals(newest.get(run.path("workflow").path("databaseId").asLong()))) continue;
+            // A failed workflow re-run (its newest attempt) is in progress: a summary status may still say it failed.
+            if (id != null && suite.path("app").path("slug").asText().equals("github-actions")
+                    && List.of("QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED").contains(suite.path("status").asText())) {
+                running.add(run.path("workflow").path("name").asText("a workflow"));
+            }
+            boolean actions = suite.path("app").path("slug").asText().equals("github-actions");
+            for (JsonNode c : suite.path("checkRuns").path("nodes")) {
+                failed.addObject().put("name", c.path("name").asText()).put("conclusion", c.path("conclusion").asText())
+                        .put("url", c.path("detailsUrl").asText(null));
+                if (actions && id != null) runs.add(id);
+            }
+        }
+        for (JsonNode ctx : commit.path("status").path("contexts")) {
+            String state = ctx.path("state").asText();
+            if (state.equals("FAILURE") || state.equals("ERROR")) {
+                failed.addObject().put("name", ctx.path("context").asText()).put("conclusion", state).put("url", ctx.path("targetUrl").asText(null));
+            }
+        }
+        runs.forEach(out.putArray("runs")::add);
+        running.forEach(out.putArray("running")::add);
+        out.put("canRerun", List.of("WRITE", "MAINTAIN", "ADMIN").contains(repository.path("viewerPermission").asText()));
+        return out;
+    }
+
     /** One PR now, with what its repo allows for merging: the repository node, its pullRequest inside. */
     JsonNode pull(int number) throws IOException {
         String[] r = repo.split("/", 2);
@@ -179,6 +255,7 @@ final class GitHub {
     static final String REPO_PATH = "/repos/[A-Za-z0-9-]+/[A-Za-z0-9._-]+";
     static final Pattern APPROVE_RUN = Pattern.compile(REPO_PATH + "/actions/runs/\\d+/approve");
     static final Pattern PENDING_DEPLOYMENTS = Pattern.compile(REPO_PATH + "/actions/runs/\\d+/pending_deployments");
+    static final Pattern RERUN_FAILED = Pattern.compile(REPO_PATH + "/actions/runs/\\d+/rerun-failed-jobs");
     static final Pattern MERGE = Pattern.compile(REPO_PATH + "/pulls/\\d+/merge");
     static final Pattern COMMENT = Pattern.compile(REPO_PATH + "/issues/\\d+/comments");
     static final Pattern SHA = Pattern.compile("[0-9a-f]{40}");
@@ -187,14 +264,15 @@ final class GitHub {
     /**
      * The only writes the tab's buttons make, as the GitHub elf's GitHubWriter
      * allows them: approving workflow runs (a fork's "Approve and run", or a run
-     * held at deployment environments you review: approve only, no comment), a
-     * merge pinned to a head commit, and the one comment "@dependabot rebase".
+     * held at deployment environments you review: approve only, no comment),
+     * re-running a run's failed jobs, a merge pinned to a head commit, and the
+     * one comment "@dependabot rebase".
      * Always in this client's repo.
      */
     static boolean allowedWrite(String repo, String method, String path, JsonNode body) {
         if (!path.startsWith("/repos/" + repo + "/")) return false;
         return switch (method) {
-            case "POST" -> (APPROVE_RUN.matcher(path).matches() && body.isObject() && body.isEmpty())
+            case "POST" -> ((APPROVE_RUN.matcher(path).matches() || RERUN_FAILED.matcher(path).matches()) && body.isObject() && body.isEmpty())
                     || (PENDING_DEPLOYMENTS.matcher(path).matches() && body.size() == 3
                             && body.path("state").asText().equals("approved") && body.path("comment").asText("-").isEmpty()
                             && body.path("environment_ids").isArray() && body.path("environment_ids").size() >= 1
@@ -212,7 +290,7 @@ final class GitHub {
     /** One of the writes {@link #allowedWrite} allows, as GITHUB_USER; anything else is refused before gh runs. */
     JsonNode write(String method, String path, JsonNode body) throws IOException {
         if (!allowedWrite(repo, method, path, body)) {
-            throw new IOException("mvnpm-dependabot only approves CI runs, merges at a head and asks Dependabot to rebase;"
+            throw new IOException("mvnpm-dependabot only approves and re-runs CI runs, merges at a head and asks Dependabot to rebase;"
                     + " refused " + method + " " + path);
         }
         return json(ghStdin(MAPPER.writeValueAsString(body), "api", "-X", method, path.substring(1), "--input", "-"));

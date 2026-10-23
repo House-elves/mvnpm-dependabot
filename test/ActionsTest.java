@@ -47,6 +47,11 @@ class ActionsTest {
     @Test
     void writesOnlyWhatTheButtonsDo() throws Exception {
         assertTrue(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/actions/runs/11/approve", json("{}")));
+        assertTrue(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/actions/runs/11/rerun-failed-jobs", json("{}")));
+        assertFalse(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/actions/runs/11/rerun-failed-jobs",
+                json("{\"enable_debug_logging\": true}")));
+        assertFalse(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/actions/runs/11/rerun", json("{}")));
+        assertFalse(GitHub.allowedWrite(R, "POST", "/repos/other/repo/actions/runs/11/rerun-failed-jobs", json("{}")));
         assertTrue(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/actions/runs/11/pending_deployments",
                 json("{\"environment_ids\": [99], \"state\": \"approved\", \"comment\": \"\"}")));
         assertFalse(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/actions/runs/11/pending_deployments",

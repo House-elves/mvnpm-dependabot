@@ -1,8 +1,8 @@
 // mvnpm-dependabot's tab on Elf Desk, and its dashboard card: Dependabot's open mvnpm bumps in the repos it checks,
 // each with the elf's verdict, its CI, whose move it is and the next step, as the GitHub board's mvnpm lane drew them.
 // It reads board/board.json (the elf's board command writes it) and state/running.json (the check running now).
-// Checking runs the elf's commands; approving CI, merging and asking Dependabot to rebase are its actions, which
-// wait for your click in the desk's bar before anything is written to GitHub.
+// Checking runs the elf's commands; approving CI, re-running its failed jobs, merging and asking Dependabot to rebase
+// are its actions, which wait for your click in the desk's bar before anything is written to GitHub.
 import {
     LitElement, html, css, svg, shared, cardStyles, spinner, ago, count, settingsButton, Ticking, elf,
 } from '/elf-kit/1/kit.js';
@@ -104,6 +104,10 @@ class MvnpmTab extends LitElement {
         _doing: { state: true },
         _error: { state: true },
         _rowError: { state: true },
+        _ciOpen: { state: true },   // the PR whose failing CI is open: key()
+        _ci: { state: true },       // its report: {failed: [{name, conclusion, url}], runs, canRerun}
+        _ciBusy: { state: true },
+        _ciError: { state: true },
     };
 
     static styles = [shared, css`
@@ -149,6 +153,17 @@ class MvnpmTab extends LitElement {
         .acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; align-items: center; max-width: 26rem; }
         .row-error { margin: 8px 0 0; font-size: 13.5px; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
         .empty { color: var(--muted); padding: 16px 18px; margin: 0; font-size: 14px; }
+        button.chip { border: 0; cursor: pointer; font-family: var(--font); }
+        button.chip:hover { filter: brightness(0.96); }
+        .panel-ci {
+            display: grid; gap: 10px; padding: 12px 14px; margin-top: 6px; border: 1.5px solid var(--bad);
+            border-radius: var(--r-panel); background: var(--surface); font-size: 14px; color: var(--ink);
+        }
+        .panel-ci ul { padding: 0 0 0 18px; display: grid; gap: 2px; list-style: disc; }
+        .panel-ci li { display: list-item; padding: 0; border: 0; overflow-wrap: anywhere; }
+        .panel-ci li:hover { background: none; }
+        .panel-ci .acts { justify-content: flex-start; max-width: none; }
+        .note { color: var(--muted); font-size: 13px; margin: 0; }
         .notice { padding: 18px 20px; display: grid; gap: 8px; max-width: 46rem; }
         .notice p { margin: 0; }
         .sk-row { display: grid; grid-template-columns: 16px 1fr 90px; gap: 14px; padding: 15px 18px; }
@@ -307,8 +322,9 @@ class MvnpmTab extends LitElement {
                     <span>${pr.repo} #${pr.number}</span>
                     ${bumpChip(row)}
                     ${verdictChip(row)}
-                    ${ciChip(pr)}
+                    ${this._ciChip(pr)}
                 </div>
+                ${this._ciOpen === key(pr) ? this._ciPanel(pr) : ''}
                 <div class="meta">
                     ${this._stepper(f)}
                     <span class="say">${f.say}</span>
@@ -319,6 +335,81 @@ class MvnpmTab extends LitElement {
             </div>
             <div class="acts">${this._actions(row)}</div>
         </li>`;
+    }
+
+    /** Failing CI is a button, as on the GitHub board: what failed, and what to do about it. */
+    _ciChip(pr) {
+        if (pr.ci !== 'FAILURE' && pr.ci !== 'ERROR') return ciChip(pr);
+        const open = this._ciOpen === key(pr);
+        return html`<button class="chip bad" aria-expanded=${open ? 'true' : 'false'} title="Show what failed and what to do"
+            @click=${() => this._toggleCi(pr)}>CI failing ▾</button>`;
+    }
+
+    async _toggleCi(pr) {
+        const k = key(pr);
+        this._ciError = null;
+        if (this._ciOpen === k) {
+            this._ciOpen = null;
+            return;
+        }
+        this._ciOpen = k;
+        this._ci = null;
+        this._ciBusy = 'load';
+        try {
+            this._ci = await elf.act('ci-report', { repo: pr.repo, pr: pr.number });
+        } catch (e) {
+            if (this._ciOpen === k) this._ciError = e.message;
+        } finally {
+            this._ciBusy = null;
+        }
+    }
+
+    async _ciDo(pr, what) {
+        this._ciBusy = what;
+        this._ciError = null;
+        try {
+            if (what === 'retry') await elf.act('ci-rerun', { repo: pr.repo, pr: pr.number });
+            else if (what === 'rebase') await elf.act('dependabot-rebase', { repo: pr.repo, pr: pr.number });
+            else await elf.openElf('github', `thread/${pr.repo}/${pr.number}`);
+            if (what !== 'why') {
+                this._ciOpen = null;
+                this._load();
+            }
+        } catch (e) {
+            if (!e.cancelled) this._ciError = what === 'why' ? `The GitHub elf isn't on your desk: add it from the + page to ask its agent.` : e.message;
+        } finally {
+            this._ciBusy = null;
+        }
+    }
+
+    _ciPanel(pr) {
+        const r = this._ci;
+        const spin = what => this._ciBusy === what ? spinner : '';
+        return html`<div class="panel-ci" role="group" aria-label="Failing CI">
+            ${this._ciBusy === 'load' ? html`<span class="note">${spinner} Reading the checks…</span>` : ''}
+            ${r ? html`
+                ${r.running?.length ? html`<p class="note">${spinner} Running again now: ${r.running.join(', ')}. What failed
+                    before may pass this time.</p>` : ''}
+                ${r.failed.length ? html`<ul>${r.failed.map(f => html`<li>
+                    <a href=${f.url ?? `${pr.url}/checks`} target="_blank" rel="noopener">${f.name}</a>
+                    <span class="note">${f.conclusion.toLowerCase().replace('_', ' ')}</span></li>`)}</ul>`
+                    : html`<p class="note">GitHub reports no failed checks any more. CI may already be running again.</p>`}
+                <div class="acts">
+                    ${r.runs.length && r.canRerun ? html`<button class="sm primary" ?disabled=${!!this._ciBusy} @click=${() => this._ciDo(pr, 'retry')}>
+                        ${spin('retry')}Retry failed builds</button>` : ''}
+                    <button class="sm" ?disabled=${!!this._ciBusy} @click=${() => this._ciDo(pr, 'rebase')}
+                        title="Dependabot rebases it on the newest base, which runs CI again">${spin('rebase')}Ask Dependabot to rebase</button>
+                    <button class="sm" ?disabled=${!!this._ciBusy} @click=${() => this._ciDo(pr, 'why')}
+                        title="Opens this PR in the GitHub elf, where its agent can say why CI fails, or fix it">Why is this failing</button>
+                </div>
+                ${!r.runs.length && r.failed.length ? html`<p class="note">These checks aren't GitHub Actions jobs, so they can't
+                    be re-run from here.</p>` : ''}
+                ${!r.canRerun ? html`<p class="note">You don't have write access to ${pr.repo}, so GitHub won't let you re-run its
+                    workflows. A rebase runs CI again.</p>` : ''}
+                <p class="note">Why is this failing opens the PR in the GitHub elf, where its agent can say why, or fix it.</p>
+            ` : ''}
+            ${this._ciError ? html`<p class="error" role="alert">${this._ciError}</p>` : ''}
+        </div>`;
     }
 
     /** "▬▭ Merge": how far along the flow is, and the stage it's at. */

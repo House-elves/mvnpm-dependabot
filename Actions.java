@@ -11,9 +11,10 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * What the tab's buttons do on GitHub: approve CI to run, merge, and ask
- * Dependabot to rebase. Each is an action in elf.yaml with ask: true, so the
- * desk shows its confirm bar and nothing is written until you click there.
+ * What the tab's buttons do on GitHub: approve CI to run, re-run its failed
+ * jobs, merge, and ask Dependabot to rebase; and, only reading, what failed.
+ * Each write is an action in elf.yaml with ask: true, so the desk shows its
+ * confirm bar and nothing is written until you click there.
  * The values come as JSON on stdin (the runner checked them against elf.yaml
  * first); the answer is the last line printed. Each reads the PR from GitHub
  * again first and refuses what doesn't fit: only open mvnpm bumps in REPOS,
@@ -39,6 +40,8 @@ final class Actions {
             GitHub gh = new GitHub(config, repo);
             ObjectNode answer = switch (action) {
                 case "approve-ci" -> approveCi(config, gh, repo, number);
+                case "ci-report" -> ciReport(gh, repo, number);
+                case "ci-rerun" -> ciRerun(config, gh, repo, number);
                 case "merge" -> merge(config, gh, repo, number, values.path("headSha").asText(""));
                 case "dependabot-rebase" -> rebase(config, gh, repo, number);
                 default -> throw new IllegalArgumentException("Not one of mvnpm-dependabot's actions: " + action);
@@ -81,6 +84,27 @@ final class Actions {
         // CI runs now: the row says so until the next read of GitHub.
         Board.update(config, prs -> prs.stream().map(x -> x.key().equals(p.pr().key()) ? x.withCi("PENDING") : x).toList());
         return Board.MAPPER.createObjectNode().put("approved", runs.size());
+    }
+
+    /** What failed on the PR's head (only reads): see {@link GitHub#ci}. */
+    static ObjectNode ciReport(GitHub gh, String repo, int number) throws IOException {
+        pull(gh, repo, number);
+        return gh.ci(number);
+    }
+
+    /** Re-runs the failed jobs of each failed GitHub Actions run on the PR's head, as the GitHub elf's Retry does. */
+    static ObjectNode ciRerun(Config config, GitHub gh, String repo, int number) throws IOException {
+        Pull p = pull(gh, repo, number);
+        ObjectNode ci = gh.ci(number);
+        if (!ci.path("canRerun").asBoolean()) throw new IllegalStateException("You don't have write access to " + repo + ", which GitHub needs to re-run its workflows.");
+        if (ci.path("runs").isEmpty()) throw new IllegalStateException("Nothing to re-run: the failed checks aren't GitHub Actions jobs.");
+        for (JsonNode run : ci.path("runs")) {
+            gh.write("POST", "/repos/" + repo + "/actions/runs/" + run.asLong() + "/rerun-failed-jobs", Board.MAPPER.createObjectNode());
+        }
+        System.out.println("Re-ran the failed jobs of " + ci.path("runs").size() + " workflow run(s) on " + repo + "#" + number);
+        // CI runs again: the row says so until the next read of GitHub.
+        Board.update(config, prs -> prs.stream().map(x -> x.key().equals(p.pr().key()) ? x.withCi("PENDING") : x).toList());
+        return Board.MAPPER.createObjectNode().put("rerun", ci.path("runs").size());
     }
 
     static ObjectNode merge(Config config, GitHub gh, String repo, int number, String headSha) throws IOException {

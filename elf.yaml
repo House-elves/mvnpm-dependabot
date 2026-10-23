@@ -1,7 +1,7 @@
 # A House Elves elf: what Elf Desk needs to install, set up and run mvnpm-dependabot.
 name: mvnpm-dependabot
 title: mvnpm
-version: 1.2.0
+version: 1.3.0
 author: "@phillip-kruger"
 description: Checks mvnpm Dependabot bumps in Quarkus repos (build, Dev UI) and says which are safe. It has its own tab, where you check, approve CI, rebase and merge them.
 main: MvnpmDependabot.java
@@ -13,7 +13,7 @@ reads:
 writes:
   - Its verdicts, its board and which check runs, in ~/.config/mvnpm-dependabot/.
   - A comment with its verdict on each PR it checks, and an approval on the ones that pass. Only when you start a check or the round from the desk.
-  - On GitHub, only when you click and confirm it in the desk's bar, as your account - approving a PR's CI runs, a merge pinned to the head you saw (when it found the bump safe and CI is green), and the comment "@dependabot rebase".
+  - On GitHub, only when you click and confirm it in the desk's bar, as your account - approving a PR's CI runs, re-running its failed CI jobs, a merge pinned to the head you saw (when it found the bump safe and CI is green), and the comment "@dependabot rebase".
 
 settings:
   - key: GITHUB_USER
@@ -75,6 +75,21 @@ actions:
     args: [--action=approve-ci]
     ask: true
     confirm: "Approve the workflow runs waiting on {repo}#{pr}, so its CI runs?"
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+  ci-report:
+    label: Read what failed in a PR's CI
+    args: [--action=ci-report]
+    ask: false
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+  ci-rerun:
+    label: Re-run the failed CI jobs
+    args: [--action=ci-rerun]
+    ask: true
+    confirm: "Re-run the failed CI jobs on {repo}#{pr}?"
     params:
       repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
       pr: {kind: int}
