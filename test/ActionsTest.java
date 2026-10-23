@@ -48,6 +48,10 @@ class ActionsTest {
     void writesOnlyWhatTheButtonsDo() throws Exception {
         assertTrue(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/actions/runs/11/approve", json("{}")));
         assertTrue(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/actions/runs/11/rerun-failed-jobs", json("{}")));
+        assertEquals("https://github.com/q/q/runs/1", GitHub.webUrl("https://github.com/q/q/runs/1"));
+        assertNull(GitHub.webUrl("javascript:alert(1)"));
+        assertNull(GitHub.webUrl("data:text/html,x"));
+        assertNull(GitHub.webUrl(null));
         assertFalse(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/actions/runs/11/rerun-failed-jobs",
                 json("{\"enable_debug_logging\": true}")));
         assertFalse(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/actions/runs/11/rerun", json("{}")));

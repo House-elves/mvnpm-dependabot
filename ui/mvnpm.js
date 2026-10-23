@@ -54,6 +54,16 @@ function checkingText(r) {
     return 'Checking every open bump';
 }
 
+/** A check's link, only if it's an http(s) address (whoever posts a status sets it). */
+function webUrl(url) {
+    try {
+        const u = new URL(url);
+        return u.protocol === 'https:' || u.protocol === 'http:' ? u.href : null;
+    } catch {
+        return null;
+    }
+}
+
 /** The PR icon, coloured by CI, as the GitHub board draws it. */
 function prIcon(pr) {
     const cls = { SUCCESS: 'ok', FAILURE: 'bad', ERROR: 'bad', PENDING: 'run', EXPECTED: 'run' }[pr.ci] ?? 'idle';
@@ -391,7 +401,7 @@ class MvnpmTab extends LitElement {
                 ${r.running?.length ? html`<p class="note">${spinner} Running again now: ${r.running.join(', ')}. What failed
                     before may pass this time.</p>` : ''}
                 ${r.failed.length ? html`<ul>${r.failed.map(f => html`<li>
-                    <a href=${f.url ?? `${pr.url}/checks`} target="_blank" rel="noopener">${f.name}</a>
+                    <a href=${webUrl(f.url) ?? `${pr.url}/checks`} target="_blank" rel="noopener">${f.name}</a>
                     <span class="note">${f.conclusion.toLowerCase().replace('_', ' ')}</span></li>`)}</ul>`
                     : html`<p class="note">GitHub reports no failed checks any more. CI may already be running again.</p>`}
                 <div class="acts">
@@ -402,7 +412,7 @@ class MvnpmTab extends LitElement {
                     <button class="sm" ?disabled=${!!this._ciBusy} @click=${() => this._ciDo(pr, 'why')}
                         title="Opens this PR in the GitHub elf, where its agent can say why CI fails, or fix it">Why is this failing</button>
                 </div>
-                ${!r.runs.length && r.failed.length ? html`<p class="note">These checks aren't GitHub Actions jobs, so they can't
+                ${!r.runs.length && r.failed.length && !r.running?.length ? html`<p class="note">These checks aren't GitHub Actions jobs, so they can't
                     be re-run from here.</p>` : ''}
                 ${!r.canRerun ? html`<p class="note">You don't have write access to ${pr.repo}, so GitHub won't let you re-run its
                     workflows. A rebase runs CI again.</p>` : ''}

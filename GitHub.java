@@ -229,20 +229,31 @@ final class GitHub {
             boolean actions = suite.path("app").path("slug").asText().equals("github-actions");
             for (JsonNode c : suite.path("checkRuns").path("nodes")) {
                 failed.addObject().put("name", c.path("name").asText()).put("conclusion", c.path("conclusion").asText())
-                        .put("url", c.path("detailsUrl").asText(null));
+                        .put("url", webUrl(c.path("detailsUrl").asText(null)));
                 if (actions && id != null) runs.add(id);
             }
         }
         for (JsonNode ctx : commit.path("status").path("contexts")) {
             String state = ctx.path("state").asText();
             if (state.equals("FAILURE") || state.equals("ERROR")) {
-                failed.addObject().put("name", ctx.path("context").asText()).put("conclusion", state).put("url", ctx.path("targetUrl").asText(null));
+                failed.addObject().put("name", ctx.path("context").asText()).put("conclusion", state).put("url", webUrl(ctx.path("targetUrl").asText(null)));
             }
         }
         runs.forEach(out.putArray("runs")::add);
         running.forEach(out.putArray("running")::add);
         out.put("canRerun", List.of("WRITE", "MAINTAIN", "ADMIN").contains(repository.path("viewerPermission").asText()));
         return out;
+    }
+
+    /** A check's link only if it's an http(s) address: whoever posts a status sets it, so it could be anything. */
+    static String webUrl(String url) {
+        if (url == null) return null;
+        try {
+            java.net.URI u = java.net.URI.create(url);
+            return ("https".equals(u.getScheme()) || "http".equals(u.getScheme())) && u.getHost() != null ? url : null;
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     /** One PR now, with what its repo allows for merging: the repository node, its pullRequest inside. */
