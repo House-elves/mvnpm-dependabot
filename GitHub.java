@@ -268,6 +268,7 @@ final class GitHub {
     static final Pattern PENDING_DEPLOYMENTS = Pattern.compile(REPO_PATH + "/actions/runs/\\d+/pending_deployments");
     static final Pattern RERUN_FAILED = Pattern.compile(REPO_PATH + "/actions/runs/\\d+/rerun-failed-jobs");
     static final Pattern MERGE = Pattern.compile(REPO_PATH + "/pulls/\\d+/merge");
+    static final Pattern PULL_PATH = Pattern.compile(REPO_PATH + "/pulls/\\d+");
     static final Pattern COMMENT = Pattern.compile(REPO_PATH + "/issues/\\d+/comments");
     static final Pattern SHA = Pattern.compile("[0-9a-f]{40}");
     static final String REBASE = "@dependabot rebase";
@@ -294,6 +295,8 @@ final class GitHub {
             case "PUT" -> MERGE.matcher(path).matches() && body.size() == 2
                     && List.of("merge", "squash", "rebase").contains(body.path("merge_method").asText())
                     && SHA.matcher(body.path("sha").asText()).matches();
+            // Closing a bump (only that: its state, nothing else of the PR).
+            case "PATCH" -> PULL_PATH.matcher(path).matches() && body.size() == 1 && "closed".equals(body.path("state").asText());
             default -> false;
         };
     }
@@ -301,7 +304,7 @@ final class GitHub {
     /** One of the writes {@link #allowedWrite} allows, as GITHUB_USER; anything else is refused before gh runs. */
     JsonNode write(String method, String path, JsonNode body) throws IOException {
         if (!allowedWrite(repo, method, path, body)) {
-            throw new IOException("mvnpm-dependabot only approves and re-runs CI runs, merges at a head and asks Dependabot to rebase;"
+            throw new IOException("mvnpm-dependabot only approves and re-runs CI runs, merges at a head, closes a bump and asks Dependabot to rebase;"
                     + " refused " + method + " " + path);
         }
         return json(ghStdin(MAPPER.writeValueAsString(body), "api", "-X", method, path.substring(1), "--input", "-"));

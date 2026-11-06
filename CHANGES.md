@@ -3,6 +3,11 @@
 What changed for you in each version of mvnpm-dependabot, newest first. The desk shows the parts that are new when it
 offers you an update.
 
+## 1.4.1
+
+- Close closes a bump from the tab (one it found not safe, say), once you confirm it in the desk's bar, instead of
+  sending you to GitHub to do it.
+
 ## 1.4.0
 
 - Queue checks: while a check runs, "Check this one" on another bump becomes "Queue check", and it's checked as soon

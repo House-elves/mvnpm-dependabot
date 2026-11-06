@@ -61,7 +61,7 @@ final class Flows {
     /** You asked Dependabot to rebase: wait for it rather than ask again. */
     static Flow rebasing(Flow f, Ctx c) {
         if (c.rebaseAsked() == null || c.checking()) return f;
-        List<Next> more = f.more().stream().filter(n -> n.id().equals("github")).toList();
+        List<Next> more = f.more().stream().filter(n -> n.id().equals("close")).toList();
         return f.with(OTHERS, c.rebaseAsked(), "You asked Dependabot to rebase it. Waiting for its push.", null, more);
     }
 
@@ -110,12 +110,12 @@ final class Flows {
                     // Re-running tests the same old merge again; a rebase takes the fix from the base.
                     yield flow(1, YOU, i.updatedAt(), "Safe, but CI is failing. Rebasing picks up any CI fixes on its base.",
                             new Next("dependabot-rebase", "Ask Dependabot to rebase"),
-                            List.of(new Next("checks", "See CI on GitHub"), new Next("github", "Close on GitHub")));
+                            List.of(new Next("checks", "See CI on GitHub"), new Next("close", "Close")));
                 }
                 if (green(i)) yield flow(1, YOU, i.updatedAt(), "Safe and green.", new Next("merge", "Merge"), List.of());
                 yield flow(1, CI, i.updatedAt(), "Safe. Waiting for required checks.", null, List.of());
             }
-            case "NOT_SAFE" -> flow(1, YOU, i.updatedAt(), "Not safe to merge.", new Next("github", "Close on GitHub"),
+            case "NOT_SAFE" -> flow(1, YOU, i.updatedAt(), "Not safe to merge.", new Next("close", "Close"),
                     List.of(new Next("comment", "Why"), new Next("check", "Check again")));
             default -> flow(1, YOU, i.updatedAt(), "The elf wants a human to look.", new Next("comment", "Read its comment"),
                     List.of(new Next("check", "Check again")));

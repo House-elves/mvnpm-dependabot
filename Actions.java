@@ -55,6 +55,7 @@ final class Actions {
                 case "ci-rerun" -> ciRerun(config, gh, repo, number);
                 case "merge" -> merge(config, gh, repo, number, values.path("headSha").asText(""));
                 case "dependabot-rebase" -> rebase(config, gh, repo, number);
+                case "close" -> close(config, gh, repo, number);
                 default -> throw new IllegalArgumentException("Not one of mvnpm-dependabot's actions: " + action);
             };
             System.out.println(Board.MAPPER.writeValueAsString(answer));
@@ -165,6 +166,18 @@ final class Actions {
         Board.writeJson(config.rebasingPath(), asked);
         Board.rejoin(config);
         return Board.MAPPER.createObjectNode().put("asked", true);
+    }
+
+    /**
+     * Closes a bump without merging (one it found not safe, say): only an open mvnpm bump. Dependabot then leaves that
+     * version alone, and opens a new PR for the next one.
+     */
+    static ObjectNode close(Config config, GitHub gh, String repo, int number) throws IOException {
+        Pull p = pull(gh, repo, number);
+        gh.write("PATCH", "/repos/" + repo + "/pulls/" + number, Board.MAPPER.createObjectNode().put("state", "closed"));
+        System.out.println("Closed " + repo + "#" + number);
+        Board.update(config, prs -> prs.stream().filter(x -> !x.key().equals(p.pr().key())).toList());
+        return Board.MAPPER.createObjectNode().put("closed", true);
     }
 
     private static String abbrev(String sha) {

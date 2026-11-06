@@ -68,6 +68,11 @@ class ActionsTest {
         // Only in the client's own repo, and nothing else at all.
         assertFalse(GitHub.allowedWrite(R, "POST", "/repos/other/repo/actions/runs/11/approve", json("{}")));
         assertFalse(GitHub.allowedWrite(R, "PATCH", "/repos/quarkusio/quarkus/issues/7", json("{\"state\": \"closed\"}")));
+        // Closing a bump: its state only.
+        assertTrue(GitHub.allowedWrite(R, "PATCH", "/repos/quarkusio/quarkus/pulls/7", json("{\"state\": \"closed\"}")));
+        assertFalse(GitHub.allowedWrite(R, "PATCH", "/repos/quarkusio/quarkus/pulls/7", json("{\"state\": \"open\"}")));
+        assertFalse(GitHub.allowedWrite(R, "PATCH", "/repos/quarkusio/quarkus/pulls/7", json("{\"state\": \"closed\", \"title\": \"x\"}")));
+        assertFalse(GitHub.allowedWrite(R, "PATCH", "/repos/other/repo/pulls/7", json("{\"state\": \"closed\"}")));
         assertFalse(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/pulls/7/reviews", json("{\"event\": \"APPROVE\"}")));
     }
 

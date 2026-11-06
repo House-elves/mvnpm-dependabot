@@ -31,14 +31,14 @@ class FlowsTest {
         Bumps.Pr bump = Prs.bump("FAILURE", "UNSTABLE", "MERGEABLE", false);
         Flows.Flow f = Flows.flow(bump, ctx(bump, "SAFE"));
         is(f, Flows.YOU, 1, "dependabot-rebase");
-        assertEquals(List.of("checks", "github"), ids(f.more()));
+        assertEquals(List.of("checks", "close"), ids(f.more()));
 
         // Asked: wait for Dependabot's push, no button to ask again.
         Instant asked = NOW.minusSeconds(120);
         Flows.Flow waiting = Flows.flow(bump, new Flows.Ctx(Prs.checked(bump, "SAFE"), true, false, NOW,
                 Flows.rebaseAsked(new Board.Rebase(bump.headSha(), asked), bump, NOW)));
         is(waiting, Flows.OTHERS, 1, null);
-        assertEquals(List.of("github"), ids(waiting.more()));
+        assertEquals(List.of("close"), ids(waiting.more()));
         // Once the head moved (or an hour went by), the ask is done with.
         assertNull(Flows.rebaseAsked(new Board.Rebase("older-sha", asked), bump, NOW));
         assertNull(Flows.rebaseAsked(new Board.Rebase(bump.headSha(), NOW.minusSeconds(7200)), bump, NOW));
@@ -115,7 +115,7 @@ class FlowsTest {
     void notSafeIsClosedAndNeedsAHumanIsRead() {
         Bumps.Pr bump = Prs.bump("SUCCESS", "CLEAN", "MERGEABLE", false);
         Flows.Flow notSafe = Flows.flow(bump, ctx(bump, "NOT_SAFE"));
-        is(notSafe, Flows.YOU, 1, "github");
+        is(notSafe, Flows.YOU, 1, "close");
         assertEquals(List.of("comment", "check"), ids(notSafe.more()));
         Flows.Flow human = Flows.flow(bump, ctx(bump, "NEEDS_HUMAN"));
         is(human, Flows.YOU, 1, "comment");
