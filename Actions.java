@@ -33,6 +33,17 @@ final class Actions {
 
     static int run(Config config, String action, JsonNode values) {
         try {
+            // The checks waiting their turn: in the elf's own state, nothing on GitHub.
+            if (action.equals("queue-check") || action.equals("unqueue-check")) {
+                String repo = config.repo(values.path("repo").asText(""));
+                int number = values.path("pr").asInt(0);
+                if (repo == null || number <= 0) throw new IllegalArgumentException("Which PR?");
+                List<CheckQueue.Item> q = action.equals("queue-check") ? CheckQueue.add(config, repo, number) : CheckQueue.remove(config, repo, number);
+                ObjectNode answer = Board.MAPPER.createObjectNode();
+                answer.set("queue", Board.MAPPER.valueToTree(q));
+                System.out.println(Board.MAPPER.writeValueAsString(answer));
+                return 0;
+            }
             String repo = config.repo(values.path("repo").asText(""));
             int number = values.path("pr").asInt(0);
             if (repo == null || !repo.contains("/")) throw new IllegalArgumentException(values.path("repo").asText() + " isn't in REPOS");

@@ -7,7 +7,7 @@
 //SOURCES Config.java Target.java Exec.java GitHub.java BomAnalyzer.java Workspace.java DevUiTester.java
 //SOURCES WebUiTester.java
 //SOURCES Report.java StateStore.java Installer.java
-//SOURCES Bumps.java Flows.java Board.java Running.java Units.java Actions.java
+//SOURCES Bumps.java Flows.java Board.java Running.java Units.java Actions.java CheckQueue.java
 
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -136,10 +136,28 @@ public class MvnpmDependabot implements Callable<Integer> {
                 return 1;
             }
             Running running = running(config);
+            // Asked for by name: it's not waiting any more.
+            if (running.kind().equals("check")) {
+                for (int n : running.prs()) CheckQueue.remove(config, running.repo(), n);
+            }
             running.write(config.runningPath());
             Board.rejoin(config);
             try {
-                return Units.available() ? Units.run(running) : checkNow(config);
+                int code = Units.available() ? Units.run(running) : checkNow(config);
+                // Then the checks asked for while this one ran, one at a time, each as if started on its own.
+                for (CheckQueue.Item next; (next = CheckQueue.next(config)) != null; ) {
+                    if (config.repo(next.repo()) == null) continue;
+                    System.out.println("Next in the queue: " + next.repo() + "#" + next.pr());
+                    repoOption = config.repo(next.repo());
+                    prNumbers = new ArrayList<>(List.of(next.pr()));
+                    dryRun = false;
+                    running = running(config);
+                    running.write(config.runningPath());
+                    Board.rejoin(config);
+                    int c = Units.available() ? Units.run(running, List.of("--repo=" + repoOption, "--pr=" + next.pr())) : checkNow(config);
+                    if (c != 0) code = c;
+                }
+                return code;
             } finally {
                 Running.clear(config.runningPath());
                 // The new verdicts on the board, with what GitHub says now (the check commented and approved).

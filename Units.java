@@ -54,6 +54,9 @@ final class Units {
         return cmd;
     }
 
+    /** The elf's own options, which come after the main class on its command line. */
+    static final List<String> OPTIONS = List.of("--once", "--dry-run", "--repo", "--pr", "--force", "--skip-ui");
+
     /** This process's own command line: java with jbang's classpath, the main class and the same options. */
     static List<String> self() {
         ProcessHandle.Info info = ProcessHandle.current().info();
@@ -68,8 +71,27 @@ final class Units {
 
     /** Runs the check in its unit and waits. Stopping the elf stops the unit too. */
     static int run(Running r) throws IOException, InterruptedException {
+        return run(r, null);
+    }
+
+    /**
+     * The same, with this run's own options replaced by {@code options} (a queued check: its --repo and --pr, and
+     * none of the first run's, like --once or --dry-run).
+     */
+    static int run(Running r, List<String> options) throws IOException, InterruptedException {
         String unit = name(r);
-        List<String> cmd = command(unit, description(r), System.getenv().getOrDefault("PATH", "/usr/bin:/bin"), self());
+        List<String> self = self();
+        if (options != null) {
+            int first = self.size();
+            for (int i = 0; i < self.size() && first == self.size(); i++) {
+                for (String o : OPTIONS) {
+                    if (self.get(i).equals(o) || self.get(i).startsWith(o + "=")) first = i;
+                }
+            }
+            self = new ArrayList<>(self.subList(0, first));
+            self.addAll(options);
+        }
+        List<String> cmd = command(unit, description(r), System.getenv().getOrDefault("PATH", "/usr/bin:/bin"), self);
         System.out.println("running the check in the systemd user unit " + unit);
         Process p = new ProcessBuilder(cmd).inheritIO().start();
         Thread stop = new Thread(() -> {

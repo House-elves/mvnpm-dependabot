@@ -3,6 +3,12 @@
 What changed for you in each version of mvnpm-dependabot, newest first. The desk shows the parts that are new when it
 offers you an update.
 
+## 1.4.0
+
+- Queue checks: while a check runs, "Check this one" on another bump becomes "Queue check", and it's checked as soon
+  as the running one is done, one after another (each builds Quarkus, so they don't run side by side). The tab says
+  what's waiting, and × takes one off.
+
 ## 1.3.0
 
 - CI failing opens a list of what failed, with a link to each failed check.

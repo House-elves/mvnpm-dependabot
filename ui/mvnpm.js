@@ -36,6 +36,15 @@ async function running() {
     }
 }
 
+/** The checks waiting their turn: [{repo, pr, at}]. */
+async function queue() {
+    try {
+        return (await elf.readJson('state', 'queue.json')) ?? [];
+    } catch {
+        return [];
+    }
+}
+
 /** owner/repo#123 */
 function key(pr) {
     return `${pr.repo}#${pr.number}`;
@@ -109,6 +118,7 @@ class MvnpmTab extends LitElement {
         _board: { state: true },
         _state: { state: true },
         _running: { state: true },
+        _queue: { state: true },
         _loading: { state: true },
         _starting: { state: true },
         _doing: { state: true },
@@ -174,6 +184,8 @@ class MvnpmTab extends LitElement {
         .panel-ci li:hover { background: none; }
         .panel-ci .acts { justify-content: flex-start; max-width: none; }
         .note { color: var(--muted); font-size: 13px; margin: 0; }
+        .queued { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); }
+        .queued .x { padding: 0 6px; min-width: 0; }
         .notice { padding: 18px 20px; display: grid; gap: 8px; max-width: 46rem; }
         .notice p { margin: 0; }
         .sk-row { display: grid; grid-template-columns: 16px 1fr 90px; gap: 14px; padding: 15px 18px; }
@@ -209,7 +221,15 @@ class MvnpmTab extends LitElement {
             this._state = await elf.state();
             this._board = await board();
             this._running = this._checking() ? await running() : null;
+            this._queue = await queue();
             this._error = null;
+            // A check queued just as the last one ended would wait for nothing: start it.
+            if (!this._checking() && this._queue.length && this._starting == null && !this._kicked) {
+                this._kicked = true;
+                const q = this._queue[0];
+                this._run('check', { repo: q.repo.split('/')[1], pr: String(q.pr) }, `${q.repo}#${q.pr}`)
+                    .finally(() => { this._kicked = false; });
+            }
         } catch (e) {
             this._error = `Couldn't load the bumps: ${e.message}`;
         } finally {
@@ -242,9 +262,28 @@ class MvnpmTab extends LitElement {
         }
     }
 
+    /** While a check runs, another waits its turn; × takes it off again. */
+    async _queueCheck(pr, off = false) {
+        this._doing = `${key(pr)} check`;
+        this._rowError = null;
+        try {
+            const r = await elf.act(off ? 'unqueue-check' : 'queue-check', { repo: pr.repo, pr: pr.number });
+            this._queue = r?.queue ?? await queue();
+        } catch (e) {
+            if (!e.cancelled) this._rowError = { key: key(pr), text: e.message };
+        } finally {
+            this._doing = null;
+        }
+    }
+
+    _queued(pr) {
+        return (this._queue ?? []).findIndex(q => q.repo.toLowerCase() === pr.repo.toLowerCase() && q.pr === pr.number);
+    }
+
     /** A row's step: a check, or one of the actions that write to GitHub once you confirm in the desk's bar. */
     async _step(row, next) {
         const pr = row.pr;
+        if (next.id === 'check' && this._checking()) return this._queueCheck(pr);
         if (next.id === 'check') return this._run('check', { repo: pr.repo.split('/')[1], pr: String(pr.number) }, key(pr));
         const values = { repo: pr.repo, pr: pr.number };
         if (next.id === 'merge') values.headSha = pr.headSha;
@@ -287,7 +326,8 @@ class MvnpmTab extends LitElement {
                     ${this._refreshing ? spinner : ''}${this._refreshing ? 'Refreshing' : 'Refresh'}</button>
                 <button ?disabled=${!!checking || this._starting != null} title="Checks every open bump not checked at its head yet: it builds and tests them, comments and approves the safe ones"
                     @click=${() => this._run('round')}>${this._starting === 'round' ? spinner : ''}Check every open bump</button>
-                ${checking ? html`<span class="status" role="status">${spinner}${checkingText(this._running)}, started ${ago(checking)}</span>` : ''}
+                ${checking ? html`<span class="status" role="status">${spinner}${checkingText(this._running)}, started ${ago(checking)}${
+                    this._queue?.length ? html`; then ${this._queue.map(q => shortKey(q.repo, q.pr)).join(', ')}` : ''}</span>` : ''}
             </div>
             ${failed ? html`<div class="failed" role="alert">
                 <p class="error">The last run failed. The end of its log:</p><pre>${failed}</pre></div>` : ''}`;
@@ -451,10 +491,20 @@ class MvnpmTab extends LitElement {
                 return row.check?.comment
                     ? html`<a class="btn ${cls}" href=${row.check.comment} target="_blank" rel="noopener">${n.label}</a>` : '';
             case 'check': {
-                const busy = this._starting === key(pr);
-                return html`<button class=${cls} ?disabled=${!!this._checking() || this._starting != null}
-                    title="Checks it now, even if it was checked before: it builds and tests it, comments and approves it if safe"
-                    @click=${() => this._step(row, n)}>${busy ? spinner : ''}${n.label}</button>`;
+                const busy = this._starting === key(pr) || this._doing === `${key(pr)} check`;
+                const r = this._running;
+                const now = r?.kind === 'check' && r.repo.toLowerCase() === pr.repo.toLowerCase() && r.prs.includes(pr.number);
+                const at = this._queued(pr);
+                if (now) return html`<span class="note">${spinner}Checking now</span>`;
+                if (at >= 0) {
+                    return html`<span class="queued">Queued${at ? ` (${at + 1} of ${this._queue.length})` : ', next'}<button class="sm quiet x" aria-label="Take ${key(pr)} off the queue"
+                        title="Don't check it after all" ?disabled=${this._doing !== null} @click=${() => this._queueCheck(pr, true)}>×</button></span>`;
+                }
+                const checking = !!this._checking();
+                return html`<button class=${cls} ?disabled=${this._starting != null || (checking && this._doing !== null)}
+                    title=${checking ? 'Checks it as soon as the running check is done (one runs at a time: each builds Quarkus)'
+                        : 'Checks it now, even if it was checked before: it builds and tests it, comments and approves it if safe'}
+                    @click=${() => this._step(row, n)}>${busy ? spinner : ''}${checking ? 'Queue check' : n.label}</button>`;
             }
             default: {
                 const busy = this._doing === `${key(pr)} ${n.id}`;
