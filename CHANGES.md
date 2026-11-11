@@ -3,6 +3,13 @@
 What changed for you in each version of mvnpm-dependabot, newest first. The desk shows the parts that are new when it
 offers you an update.
 
+## 1.5.0
+
+- **Let an agent do it** on a bump that needs a look, isn't safe or fails CI (with the Sessions elf on your desk):
+  a new session there makes the same bump and fixes what it needs, lock files and UI tests included. You push it as
+  your own PR; then the session's **Close Dependabot's #N** closes this one here, with "Superseded by #N.", on your
+  confirm.
+
 ## 1.4.1
 
 - Close closes a bump from the tab (one it found not safe, say), once you confirm it in the desk's bar, instead of

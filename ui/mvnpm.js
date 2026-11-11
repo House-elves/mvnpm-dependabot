@@ -24,6 +24,11 @@ const VERDICTS = {
     NEEDS_HUMAN: { cls: 'warn', text: 'Needs a look' },
 };
 
+/** A PR as a Sessions link's ref: owner.repo.number (an owner has no dot; a route has no "/" in a ref). */
+const refOf = pr => `${pr.repo.replace('/', '.')}.${pr.number}`;
+const fromRef = ref => { const m = /^([A-Za-z0-9-]+)\.([A-Za-z0-9._-]+)\.([0-9]{1,7})$/.exec(ref ?? ''); return m ? { repo: `${m[1]}/${m[2]}`, number: Number(m[3]) } : null; };
+const routeText = s => encodeURIComponent(s).replace(/[!'()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+
 async function board() {
     return elf.readJson('board', 'board.json');
 }
@@ -128,6 +133,8 @@ class MvnpmTab extends LitElement {
         _ci: { state: true },       // its report: {failed: [{name, conclusion, url}], runs, canRerun}
         _ciBusy: { state: true },
         _ciError: { state: true },
+        _sessions: { state: true }, // the Sessions elf is on the desk: Let an agent do it
+        _closing: { state: true },  // {row, by}: Sessions sent you here to close a bump your own PR takes over
     };
 
     static styles = [shared, css`
@@ -209,11 +216,42 @@ class MvnpmTab extends LitElement {
         this._load();
         // A run started or ended (a refresh read GitHub, a check found its verdicts): read the files again.
         this._off = elf.onChange(() => this._load());
+        (typeof elf.hasElf === 'function' ? elf.hasElf('sessions') : Promise.resolve(false))
+            .then(on => { this._sessions = on; }).catch(() => {});
+        this._offRoute = elf.onRoute(r => this._routed(r));
+        this._routed(elf.route());
     }
 
     disconnectedCallback() {
         this._off?.();
+        this._offRoute?.();
         super.disconnectedCallback();
+    }
+
+    /** close/<owner.repo.pr>/<by>: from a Sessions session whose own PR takes the bump over. */
+    async _routed(route) {
+        const p = (route ?? '').split('/');
+        if (p[0] !== 'close') return;
+        const pr = fromRef(p[1]);
+        const by = /^[0-9]{1,7}$/.test(p[2] ?? '') ? Number(p[2]) : 0;
+        elf.go('', { replace: true }).catch(() => {});
+        if (!pr || !by) return;
+        if (!this._board) await this._load();
+        const row = (this._board?.rows ?? []).find(r => r.pr.repo.toLowerCase() === pr.repo.toLowerCase() && r.pr.number === pr.number);
+        if (!row) {
+            this._error = `${pr.repo}#${pr.number} isn't an open bump any more: closed already, or merged.`;
+            return;
+        }
+        this._closing = { row, by };
+        await this._step(row, { id: 'close-superseded', label: `Close it, superseded by #${by}` });
+        this._closing = null;
+    }
+
+    /** A new session in Sessions, its goal written from this bump: the agent makes the bump itself and fixes what it breaks. */
+    _toAgent(row) {
+        const pr = row.pr;
+        elf.openElf('sessions', `new/mvnpm-dependabot/${refOf(pr)}/${routeText(pr.title)}`)
+            .catch(e => { this._rowError = { key: key(pr), text: e.message }; });
     }
 
     async _load() {
@@ -287,6 +325,7 @@ class MvnpmTab extends LitElement {
         if (next.id === 'check') return this._run('check', { repo: pr.repo.split('/')[1], pr: String(pr.number) }, key(pr));
         const values = { repo: pr.repo, pr: pr.number };
         if (next.id === 'merge') values.headSha = pr.headSha;
+        if (next.id === 'close-superseded') values.by = this._closing?.by;
         this._doing = `${key(pr)} ${next.id}`;
         this._rowError = null;
         try {
@@ -475,6 +514,10 @@ class MvnpmTab extends LitElement {
         const f = row.flow;
         const steps = [f.next, ...f.more].filter(Boolean);
         if (f.waiting !== 'agent' && !steps.some(n => n.id === 'check')) steps.push({ id: 'check', label: 'Check this one' });
+        // Not safe as it is: an agent makes the same bump in a session and fixes what it needs (lock files, tests).
+        if (this._sessions && f.waiting !== 'agent' && (['NEEDS_HUMAN', 'NOT_SAFE'].includes(row.check?.verdict) || row.pr.ci === 'FAILURE')) {
+            steps.push({ id: 'agent', label: 'Let an agent do it' });
+        }
         return html`${steps.map((n, i) => this._action(row, n, i === 0 && n === f.next))}
             ${steps.some(n => n.id === 'github') ? '' : html`<a class="btn sm quiet" href=${row.pr.url} target="_blank" rel="noopener">On GitHub</a>`}`;
     }
@@ -490,6 +533,9 @@ class MvnpmTab extends LitElement {
             case 'comment':
                 return row.check?.comment
                     ? html`<a class="btn ${cls}" href=${row.check.comment} target="_blank" rel="noopener">${n.label}</a>` : '';
+            case 'agent':
+                return html`<button class=${cls} title="Opens a new session in Sessions with this bump as its goal: the agent makes the same bump and fixes what it breaks, you push it as your own PR, then close this one"
+                    @click=${() => this._toAgent(row)}>${n.label}</button>`;
             case 'check': {
                 const busy = this._starting === key(pr) || this._doing === `${key(pr)} check`;
                 const r = this._running;

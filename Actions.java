@@ -56,6 +56,7 @@ final class Actions {
                 case "merge" -> merge(config, gh, repo, number, values.path("headSha").asText(""));
                 case "dependabot-rebase" -> rebase(config, gh, repo, number);
                 case "close" -> close(config, gh, repo, number);
+                case "close-superseded" -> closeSuperseded(config, gh, repo, number, values.path("by").asInt(0));
                 default -> throw new IllegalArgumentException("Not one of mvnpm-dependabot's actions: " + action);
             };
             System.out.println(Board.MAPPER.writeValueAsString(answer));
@@ -178,6 +179,15 @@ final class Actions {
         System.out.println("Closed " + repo + "#" + number);
         Board.update(config, prs -> prs.stream().filter(x -> !x.key().equals(p.pr().key())).toList());
         return Board.MAPPER.createObjectNode().put("closed", true);
+    }
+
+    /** Your own PR takes the bump over: say which on Dependabot's, then close it. */
+    static ObjectNode closeSuperseded(Config config, GitHub gh, String repo, int number, int by) throws IOException {
+        if (by <= 0 || by == number) throw new IllegalArgumentException("Which PR takes it over?");
+        pull(gh, repo, number);
+        gh.write("POST", "/repos/" + repo + "/issues/" + number + "/comments",
+                Board.MAPPER.createObjectNode().put("body", "Superseded by #" + by + "."));
+        return close(config, gh, repo, number);
     }
 
     private static String abbrev(String sha) {

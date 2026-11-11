@@ -1,7 +1,7 @@
 # A House Elves elf: what Elf Desk needs to install, set up and run mvnpm-dependabot.
 name: mvnpm-dependabot
 title: mvnpm
-version: 1.4.1
+version: 1.5.0
 author: "@phillip-kruger"
 description: Checks mvnpm Dependabot bumps in Quarkus repos (build, Dev UI) and says which are safe. It has its own tab, where you check, approve CI, rebase and merge them.
 main: MvnpmDependabot.java
@@ -13,7 +13,8 @@ reads:
 writes:
   - Its verdicts, its board, which check runs and which wait their turn, in ~/.config/mvnpm-dependabot/.
   - A comment with its verdict on each PR it checks, and an approval on the ones that pass. Only when you start a check or the round from the desk.
-  - On GitHub, only when you click and confirm it in the desk's bar, as your account - approving a PR's CI runs, re-running its failed CI jobs, a merge pinned to the head you saw (when it found the bump safe and CI is green), closing a bump without merging it, and the comment "@dependabot rebase".
+  - On GitHub, only when you click and confirm it in the desk's bar, as your account - approving a PR's CI runs, re-running its failed CI jobs, a merge pinned to the head you saw (when it found the bump safe and CI is green), closing a bump without merging it (with "Superseded by #N" when your own PR takes it over), and the comment "@dependabot rebase".
+  - Let an agent do it hands a bump to the Sessions elf: it opens a new session there for you to start, nothing more.
 
 settings:
   - key: GITHUB_USER
@@ -125,6 +126,16 @@ actions:
     params:
       repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
       pr: {kind: int}
+  # Your own PR takes the bump (made in a Sessions session): Dependabot's closes with a comment that says which.
+  close-superseded:
+    label: Close a bump your own PR takes over
+    args: [--action=close-superseded]
+    ask: true
+    confirm: "Close {repo}#{pr} on GitHub without merging it, as you, with the comment \"Superseded by #{by}\"? Dependabot then skips this version."
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+      by: {kind: int}
   dependabot-rebase:
     label: Ask Dependabot to rebase
     args: [--action=dependabot-rebase]

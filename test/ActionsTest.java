@@ -64,6 +64,9 @@ class ActionsTest {
                 json("{\"merge_method\": \"squash\", \"sha\": \"" + SHA + "\"}")));
         assertFalse(GitHub.allowedWrite(R, "PUT", "/repos/quarkusio/quarkus/pulls/7/merge", json("{\"merge_method\": \"squash\"}")));
         assertTrue(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/issues/7/comments", json("{\"body\": \"@dependabot rebase\"}")));
+        assertTrue(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/issues/7/comments", json("{\"body\": \"Superseded by #4120.\"}")));
+        assertFalse(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/issues/7/comments", json("{\"body\": \"Superseded by #4120. And more\"}")));
+        assertFalse(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/issues/7/comments", json("{\"body\": \"Superseded by someone\"}")));
         assertFalse(GitHub.allowedWrite(R, "POST", "/repos/quarkusio/quarkus/issues/7/comments", json("{\"body\": \"@dependabot merge\"}")));
         // Only in the client's own repo, and nothing else at all.
         assertFalse(GitHub.allowedWrite(R, "POST", "/repos/other/repo/actions/runs/11/approve", json("{}")));

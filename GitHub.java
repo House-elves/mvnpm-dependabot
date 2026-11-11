@@ -272,13 +272,15 @@ final class GitHub {
     static final Pattern COMMENT = Pattern.compile(REPO_PATH + "/issues/\\d+/comments");
     static final Pattern SHA = Pattern.compile("[0-9a-f]{40}");
     static final String REBASE = "@dependabot rebase";
+    /** The comment a bump closes with when your own PR takes it over. */
+    static final Pattern SUPERSEDED = Pattern.compile("Superseded by #\\d{1,7}\\.");
 
     /**
      * The only writes the tab's buttons make, as the GitHub elf's GitHubWriter
      * allows them: approving workflow runs (a fork's "Approve and run", or a run
      * held at deployment environments you review: approve only, no comment),
      * re-running a run's failed jobs, a merge pinned to a head commit, and the
-     * one comment "@dependabot rebase".
+     * comments "@dependabot rebase" and "Superseded by #N." (before closing a bump your own PR takes over).
      * Always in this client's repo.
      */
     static boolean allowedWrite(String repo, String method, String path, JsonNode body) {
@@ -291,7 +293,8 @@ final class GitHub {
                             && body.path("environment_ids").size() <= 3
                             && java.util.stream.StreamSupport.stream(body.path("environment_ids").spliterator(), false)
                                     .allMatch(JsonNode::isIntegralNumber))
-                    || (COMMENT.matcher(path).matches() && body.size() == 1 && REBASE.equals(body.path("body").asText()));
+                    || (COMMENT.matcher(path).matches() && body.size() == 1 && (REBASE.equals(body.path("body").asText())
+                            || SUPERSEDED.matcher(body.path("body").asText()).matches()));
             case "PUT" -> MERGE.matcher(path).matches() && body.size() == 2
                     && List.of("merge", "squash", "rebase").contains(body.path("merge_method").asText())
                     && SHA.matcher(body.path("sha").asText()).matches();
@@ -304,7 +307,7 @@ final class GitHub {
     /** One of the writes {@link #allowedWrite} allows, as GITHUB_USER; anything else is refused before gh runs. */
     JsonNode write(String method, String path, JsonNode body) throws IOException {
         if (!allowedWrite(repo, method, path, body)) {
-            throw new IOException("mvnpm-dependabot only approves and re-runs CI runs, merges at a head, closes a bump and asks Dependabot to rebase;"
+            throw new IOException("mvnpm-dependabot only approves and re-runs CI runs, merges at a head, closes a bump (saying which PR supersedes it) and asks Dependabot to rebase;"
                     + " refused " + method + " " + path);
         }
         return json(ghStdin(MAPPER.writeValueAsString(body), "api", "-X", method, path.substring(1), "--input", "-"));
