@@ -3,6 +3,14 @@
 What changed for you in each version of mvnpm-dependabot, newest first. The desk shows the parts that are new when it
 offers you an update.
 
+## 1.6.0
+
+- New: **Merged bumps, to backport?** under the bumps: the mvnpm bumps merged in the last 7 days, in repos with
+  backport labels (Quarkus' `triage/backport`, `triage/backport-3.40`...). A bump you merge from the tab shows there at
+  once. **Backport…** lets you pick the branch; the bump is first tried as a cherry-pick onto it, and only a clean one
+  is offered the label, which you confirm in the desk's bar. A conflict names the files, and no label goes on.
+  `triage/backport` means the newest release branch (4.0 now).
+
 ## 1.5.0
 
 - **Let an agent do it** on a bump that needs a look, isn't safe or fails CI (with the Sessions elf on your desk):

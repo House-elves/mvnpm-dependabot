@@ -6,6 +6,7 @@
 import {
     LitElement, html, css, svg, shared, cardStyles, spinner, ago, count, settingsButton, Ticking, elf,
 } from '/elf-kit/1/kit.js';
+import './backports.js';
 
 /** The tab's sections, by whose move it is (the board's flow.waiting). */
 const SECTIONS = [
@@ -352,6 +353,7 @@ class MvnpmTab extends LitElement {
                 ${this._error ? html`<p class="error" role="alert">${this._error}</p>` : ''}
                 ${(b?.errors ?? []).map(e => html`<p class="error">GitHub couldn't be read for ${e}. Its bumps are from the read before.</p>`)}
                 ${this._loading && !b ? this._skeleton() : b ? this._sections(b) : this._noBoard()}
+                <mvnpm-backports></mvnpm-backports>
             </div>`;
     }
 

@@ -271,6 +271,8 @@ final class GitHub {
     static final Pattern PULL_PATH = Pattern.compile(REPO_PATH + "/pulls/\\d+");
     static final Pattern COMMENT = Pattern.compile(REPO_PATH + "/issues/\\d+/comments");
     static final Pattern SHA = Pattern.compile("[0-9a-f]{40}");
+    static final Pattern REPO_NAME = Pattern.compile("[A-Za-z0-9-]+/[A-Za-z0-9._-]+");
+    static final Pattern LABELS = Pattern.compile(REPO_PATH + "/issues/\\d+/labels");
     static final String REBASE = "@dependabot rebase";
     /** The comment a bump closes with when your own PR takes it over. */
     static final Pattern SUPERSEDED = Pattern.compile("Superseded by #\\d{1,7}\\.");
@@ -294,7 +296,10 @@ final class GitHub {
                             && java.util.stream.StreamSupport.stream(body.path("environment_ids").spliterator(), false)
                                     .allMatch(JsonNode::isIntegralNumber))
                     || (COMMENT.matcher(path).matches() && body.size() == 1 && (REBASE.equals(body.path("body").asText())
-                            || SUPERSEDED.matcher(body.path("body").asText()).matches()));
+                            || SUPERSEDED.matcher(body.path("body").asText()).matches()))
+                    // One backport label on a merged bump, once it cherry-picks cleanly onto the label's branch.
+                    || (LABELS.matcher(path).matches() && body.size() == 1 && body.path("labels").size() == 1
+                            && Backport.LABEL.matcher(body.path("labels").path(0).asText()).matches());
             case "PUT" -> MERGE.matcher(path).matches() && body.size() == 2
                     && List.of("merge", "squash", "rebase").contains(body.path("merge_method").asText())
                     && SHA.matcher(body.path("sha").asText()).matches();
@@ -307,10 +312,25 @@ final class GitHub {
     /** One of the writes {@link #allowedWrite} allows, as GITHUB_USER; anything else is refused before gh runs. */
     JsonNode write(String method, String path, JsonNode body) throws IOException {
         if (!allowedWrite(repo, method, path, body)) {
-            throw new IOException("mvnpm-dependabot only approves and re-runs CI runs, merges at a head, closes a bump (saying which PR supersedes it) and asks Dependabot to rebase;"
+            throw new IOException("mvnpm-dependabot only approves and re-runs CI runs, merges at a head, closes a bump (saying which PR supersedes it), asks Dependabot to rebase and adds a backport label;"
                     + " refused " + method + " " + path);
         }
         return json(ghStdin(MAPPER.writeValueAsString(body), "api", "-X", method, path.substring(1), "--input", "-"));
+    }
+
+    /** A REST read (path without the leading /), or null when GitHub says 404. */
+    JsonNode get(String path) throws IOException {
+        try {
+            return json(gh("api", path));
+        } catch (IOException e) {
+            if (e.getMessage() != null && e.getMessage().contains("HTTP 404")) return null;
+            throw e;
+        }
+    }
+
+    /** The token, for git's fetch of a private repo: it goes in git's environment, never on its command line. */
+    String gitToken() throws IOException {
+        return token();
     }
 
     private JsonNode graphql(List<String> args) throws IOException {

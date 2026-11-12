@@ -57,6 +57,8 @@ final class Actions {
                 case "dependabot-rebase" -> rebase(config, gh, repo, number);
                 case "close" -> close(config, gh, repo, number);
                 case "close-superseded" -> closeSuperseded(config, gh, repo, number, values.path("by").asInt(0));
+                case "backport-check" -> backportCheck(config, gh, repo, number, values.path("label").asText(""));
+                case "backport" -> backport(config, gh, repo, number, values.path("label").asText(""));
                 default -> throw new IllegalArgumentException("Not one of mvnpm-dependabot's actions: " + action);
             };
             System.out.println(Board.MAPPER.writeValueAsString(answer));
@@ -130,9 +132,33 @@ final class Actions {
         ObjectNode body = Board.MAPPER.createObjectNode().put("merge_method", method).put("sha", headSha);
         JsonNode done = gh.write("PUT", "/repos/" + repo + "/pulls/" + number + "/merge", body);
         System.out.println("Merged " + repo + "#" + number + " (" + method + ") at " + headSha.substring(0, 7));
-        // Merged: it leaves the board.
+        // Merged: it leaves the board, for the merged bumps you can backport.
         Board.update(config, prs -> prs.stream().filter(x -> !x.key().equals(p.pr().key())).toList());
+        Backport.justMerged(gh::get, repo, number);
         return Board.MAPPER.createObjectNode().put("merged", done.path("sha").asText(headSha)).put("method", method);
+    }
+
+    /** Tries a merged bump as a cherry-pick onto the backport label's branch (only reads, and fetches into git/). */
+    static ObjectNode backportCheck(Config config, GitHub gh, String repo, int number, String label) throws IOException {
+        Backport.Check c = Backport.check(gh::get, Backport.cli(config.workDir.resolve("git"), gh.gitToken()), repo, number, label);
+        return Board.MAPPER.valueToTree(c);
+    }
+
+    /** Adds the backport label, only if the bump cherry-picks cleanly onto its branch (tried again first). */
+    static ObjectNode backport(Config config, GitHub gh, String repo, int number, String label) throws IOException {
+        Backport.Check c = Backport.check(gh::get, Backport.cli(config.workDir.resolve("git"), gh.gitToken()), repo, number, label);
+        if (!c.clean()) {
+            throw new IllegalStateException(repo + "#" + number + " doesn't cherry-pick cleanly onto " + c.branch()
+                    + " (conflicts in " + String.join(", ", c.conflicts()) + "), so " + label + " wasn't added.");
+        }
+        if (!c.labelled()) {
+            ObjectNode body = Board.MAPPER.createObjectNode();
+            body.putArray("labels").add(label);
+            gh.write("POST", "/repos/" + repo + "/issues/" + number + "/labels", body);
+            System.out.println("Labelled " + repo + "#" + number + " " + label + " (cherry-picks cleanly onto " + c.branch() + ")");
+            Backport.labelled(repo + "#" + number, label);
+        }
+        return Board.MAPPER.valueToTree(new Backport.Check(repo, number, label, c.branch(), true, List.of(), true));
     }
 
     /** Why the tab's Merge is refused, or null: the head you saw, the elf's SAFE at that head, and green CI. */

@@ -1,7 +1,7 @@
 # A House Elves elf: what Elf Desk needs to install, set up and run mvnpm-dependabot.
 name: mvnpm-dependabot
 title: mvnpm
-version: 1.5.0
+version: 1.6.0
 author: "@phillip-kruger"
 description: Checks mvnpm Dependabot bumps in Quarkus repos (build, Dev UI) and says which are safe. It has its own tab, where you check, approve CI, rebase and merge them.
 main: MvnpmDependabot.java
@@ -10,10 +10,12 @@ tools: [gh, git, mvn, claude, chromium-browser]
 
 reads:
   - The open mvnpm Dependabot PRs in the repos you list, with their CI, reviews and merge state, through gh as your account.
+  - The mvnpm bumps merged there in the last 7 days, with their labels, in repos that have backport labels (triage/backport-3.40, say).
 writes:
   - Its verdicts, its board, which check runs and which wait their turn, in ~/.config/mvnpm-dependabot/.
   - A comment with its verdict on each PR it checks, and an approval on the ones that pass. Only when you start a check or the round from the desk.
   - On GitHub, only when you click and confirm it in the desk's bar, as your account - approving a PR's CI runs, re-running its failed CI jobs, a merge pinned to the head you saw (when it found the bump safe and CI is green), closing a bump without merging it (with "Superseded by #N" when your own PR takes it over), and the comment "@dependabot rebase".
+  - A backport label (triage/backport-3.40, say) on a merged bump, when you click and confirm it, and only once the bump cherry-picks cleanly onto that branch. The cherry-pick is tried in a bare, blobless copy of the repo in ~/.local/state/mvnpm-dependabot/git/.
   - Let an agent do it hands a bump to the Sessions elf: it opens a new session there for you to start, nothing more.
 
 settings:
@@ -144,3 +146,24 @@ actions:
     params:
       repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
       pr: {kind: int}
+  # A merged bump, tried as a cherry-pick onto a backport label's branch: only reads (and fetches into its git copy).
+  backport-check:
+    label: Try a merged bump as a cherry-pick onto a backport branch
+    args: [--action=backport-check]
+    ask: false
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+      label: {pattern: '([A-Za-z0-9 _.-]{1,40}/)?backport(-[0-9][A-Za-z0-9.]{0,20})?\??', max: 80}
+  # Tried again first: the label goes on only if it cherry-picks cleanly.
+  backport:
+    label: Add a backport label to a merged bump
+    args: [--action=backport]
+    ask: true
+    confirm: "Add the label {label} to {repo}#{pr} on GitHub, as you? It cherry-picks cleanly onto {branch}, which is checked again first."
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+      label: {pattern: '([A-Za-z0-9 _.-]{1,40}/)?backport(-[0-9][A-Za-z0-9.]{0,20})?\??', max: 80}
+      # For the confirm bar's words: the elf works the branch out from the label itself.
+      branch: {pattern: '[0-9]+\.[0-9]+', max: 20}

@@ -7,7 +7,7 @@
 //SOURCES Config.java Target.java Exec.java GitHub.java BomAnalyzer.java Workspace.java DevUiTester.java
 //SOURCES WebUiTester.java
 //SOURCES Report.java StateStore.java Installer.java
-//SOURCES Bumps.java Flows.java Board.java Running.java Units.java Actions.java CheckQueue.java
+//SOURCES Bumps.java Flows.java Board.java Running.java Units.java Actions.java CheckQueue.java Backport.java
 
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -118,7 +118,12 @@ public class MvnpmDependabot implements Callable<Integer> {
             return 0;
         }
         if (action != null) return Actions.run(config, action);
-        if (board) return Board.refresh(config);
+        if (board) {
+            int status = Board.refresh(config);
+            // Merged bumps you can label for backporting: their own list, beside the board.
+            Backport.refresh(config);
+            return status;
+        }
         if (repoOption != null) {
             String repo = config.repo(repoOption);
             if (repo == null) {
