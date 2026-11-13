@@ -89,4 +89,14 @@ class BackportTest {
         assertFalse(GitHub.allowedWrite("quarkusio/quarkus", "POST", "/repos/quarkusio/quarkus/issues/7/labels", other));
         assertFalse(GitHub.allowedWrite("quarkusio/quarkus", "POST", "/repos/other/repo/issues/7/labels", ok));
     }
+
+    @Test
+    void notToBackportStaysOffTheList(@org.junit.jupiter.api.io.TempDir java.nio.file.Path state) throws Exception {
+        assertTrue(Backport.skipped(state).isEmpty());
+        assertEquals(Map.of(), Backport.skipped(state));
+        java.nio.file.Files.writeString(state.resolve("backport-skipped.json"),
+                "{\"quarkusio/quarkus#58343\":\"" + Instant.now() + "\",\"a/b#1\":\"2020-01-01T00:00:00Z\"}");
+        // An old one is forgotten: the bump left the list long ago.
+        assertEquals(java.util.Set.of("quarkusio/quarkus#58343"), Backport.skipped(state).keySet());
+    }
 }

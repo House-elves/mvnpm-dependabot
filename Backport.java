@@ -75,6 +75,8 @@ final class Backport {
                 System.err.println("Reading the merged bumps of " + repo + " failed: " + e.getMessage());
             }
         }
+        var skipped = skipped(config.stateDir);
+        all.removeIf(m -> skipped.containsKey(m.key()));
         all.sort(Comparator.comparing(Merged::mergedAt, Comparator.nullsLast(Comparator.reverseOrder())));
         try {
             ObjectNode view = Board.MAPPER.createObjectNode();
@@ -83,6 +85,48 @@ final class Backport {
             Board.writeJson(mergedPath(), view);
         } catch (IOException e) {
             System.err.println("Could not write the merged bumps: " + e.getMessage());
+        }
+    }
+
+    /**
+     * The merged bumps you said not to backport, in state/backport-skipped.json ({key: when}): they leave the list for
+     * good. Kept for a month, longer than a bump stays on the list.
+     */
+    static java.util.Map<String, Instant> skipped(Path stateDir) {
+        java.util.Map<String, Instant> out = new java.util.LinkedHashMap<>();
+        Path f = stateDir.resolve("backport-skipped.json");
+        try {
+            if (Files.exists(f)) {
+                Instant cutoff = Instant.now().minus(java.time.Duration.ofDays(30));
+                Board.MAPPER.readTree(f.toFile()).fields().forEachRemaining(e -> {
+                    try {
+                        Instant at = Instant.parse(e.getValue().asText());
+                        if (at.isAfter(cutoff)) out.put(e.getKey(), at);
+                    } catch (RuntimeException ignored) {
+                        // A broken entry is dropped.
+                    }
+                });
+            }
+        } catch (IOException | RuntimeException e) {
+            System.err.println("Could not read " + f + ": " + e.getMessage());
+        }
+        return out;
+    }
+
+    /** Not to backport: off the list from now on, and off board/merged.json now. Nothing changes on GitHub. */
+    static void skip(Path stateDir, String key) throws IOException {
+        java.util.Map<String, Instant> all = skipped(stateDir);
+        all.put(key, Instant.now());
+        ObjectNode out = Board.MAPPER.createObjectNode();
+        all.forEach((k, v) -> out.put(k, v.toString()));
+        Files.createDirectories(stateDir);
+        Board.writeJson(stateDir.resolve("backport-skipped.json"), out);
+        if (Files.exists(mergedPath())) {
+            ObjectNode view = (ObjectNode) Board.MAPPER.readTree(mergedPath().toFile());
+            ArrayNode items = Board.MAPPER.createArrayNode();
+            view.path("items").forEach(i -> { if (!i.path("key").asText().equals(key)) items.add(i); });
+            view.set("items", items);
+            Board.writeJson(mergedPath(), view);
         }
     }
 

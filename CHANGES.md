@@ -3,6 +3,11 @@
 What changed for you in each version of mvnpm-dependabot, newest first. The desk shows the parts that are new when it
 offers you an update.
 
+## 1.7.0
+
+- **Don't backport** on a merged bump takes it off the backport list for good, when it doesn't need a backport. Nothing
+  changes on GitHub. One that has its backport label already has **Done** instead, to clear it from the list.
+
 ## 1.6.0
 
 - New: **Merged bumps, to backport?** under the bumps: the mvnpm bumps merged in the last 7 days, in repos with

@@ -59,6 +59,10 @@ final class Actions {
                 case "close-superseded" -> closeSuperseded(config, gh, repo, number, values.path("by").asInt(0));
                 case "backport-check" -> backportCheck(config, gh, repo, number, values.path("label").asText(""));
                 case "backport" -> backport(config, gh, repo, number, values.path("label").asText(""));
+                case "backport-skip" -> {
+                    Backport.skip(config.stateDir, repo + "#" + number);
+                    yield Board.MAPPER.createObjectNode().put("skipped", repo + "#" + number);
+                }
                 default -> throw new IllegalArgumentException("Not one of mvnpm-dependabot's actions: " + action);
             };
             System.out.println(Board.MAPPER.writeValueAsString(answer));

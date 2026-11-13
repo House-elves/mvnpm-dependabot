@@ -1,7 +1,7 @@
 # A House Elves elf: what Elf Desk needs to install, set up and run mvnpm-dependabot.
 name: mvnpm-dependabot
 title: mvnpm
-version: 1.6.0
+version: 1.7.0
 author: "@phillip-kruger"
 description: Checks mvnpm Dependabot bumps in Quarkus repos (build, Dev UI) and says which are safe. It has its own tab, where you check, approve CI, rebase and merge them.
 main: MvnpmDependabot.java
@@ -155,6 +155,14 @@ actions:
       repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
       pr: {kind: int}
       label: {pattern: '([A-Za-z0-9 _.-]{1,40}/)?backport(-[0-9][A-Za-z0-9.]{0,20})?\??', max: 80}
+  # Off the merged list for good: not to backport (or done with it). Writes only the elf's own state.
+  backport-skip:
+    label: Take a merged bump off the backport list
+    args: [--action=backport-skip]
+    ask: false
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
   # Tried again first: the label goes on only if it cherry-picks cleanly.
   backport:
     label: Add a backport label to a merged bump
