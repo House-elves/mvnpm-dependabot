@@ -1,7 +1,7 @@
 # A House Elves elf: what Elf Desk needs to install, set up and run mvnpm-dependabot.
 name: mvnpm-dependabot
 title: mvnpm
-version: 1.7.0
+version: 1.8.0
 author: "@phillip-kruger"
 description: Checks mvnpm Dependabot bumps in Quarkus repos (build, Dev UI) and says which are safe. It has its own tab, where you check, approve CI, rebase and merge them.
 main: MvnpmDependabot.java
@@ -14,7 +14,7 @@ reads:
 writes:
   - Its verdicts, its board, which check runs and which wait their turn, in ~/.config/mvnpm-dependabot/.
   - A comment with its verdict on each PR it checks, and an approval on the ones that pass. Only when you start a check or the round from the desk.
-  - On GitHub, only when you click and confirm it in the desk's bar, as your account - approving a PR's CI runs, re-running its failed CI jobs, a merge pinned to the head you saw (when it found the bump safe and CI is green), closing a bump without merging it (with "Superseded by #N" when your own PR takes it over), and the comment "@dependabot rebase".
+  - On GitHub, only when you click and confirm it in the desk's bar, as your account - approving a PR's CI runs, re-running its failed CI jobs, a merge pinned to the head you saw, or to the one Dependabot rebased it to without changing the bump (when it found the bump safe and CI is green; clicked while CI runs, it merges at a later refresh once CI is green, and you can call that off), closing a bump without merging it (with "Superseded by #N" when your own PR takes it over), and the comment "@dependabot rebase".
   - A backport label (triage/backport-3.40, say) on a merged bump, when you click and confirm it, and only once the bump cherry-picks cleanly onto that branch. The cherry-pick is tried in a bare, blobless copy of the repo in ~/.local/state/mvnpm-dependabot/git/.
   - Let an agent do it hands a bump to the Sessions elf: it opens a new session there for you to start, nothing more.
 
@@ -115,11 +115,18 @@ actions:
     label: Merge a safe, green bump
     args: [--action=merge]
     ask: true
-    confirm: "Merge {repo}#{pr} on GitHub, at the head you saw?"
+    confirm: "Merge {repo}#{pr} on GitHub? If Dependabot rebased it since without changing the bump, the rebased one merges; if CI is still running, it merges once CI is green."
     params:
       repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
       pr: {kind: int}
       headSha: {pattern: '[0-9a-f]{40}', max: 40}
+  unqueue-merge:
+    label: Don't merge a bump that waits for green CI
+    args: [--action=unqueue-merge]
+    ask: false
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
   close:
     label: Close a bump without merging it
     args: [--action=close]

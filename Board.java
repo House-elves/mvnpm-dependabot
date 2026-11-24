@@ -67,6 +67,8 @@ final class Board {
 
     /** Reads GitHub and writes the board. 1 when a repo couldn't be read (the others are still written). */
     static int refresh(Config config) throws IOException {
+        // Merges you clicked while CI ran: before reading GitHub, so what merged is off the board this time.
+        MergeWhenGreen.run(config);
         View before = read(config.boardPath());
         List<Bumps.Pr> prs = new ArrayList<>();
         List<String> errors = new ArrayList<>();
@@ -78,6 +80,11 @@ final class Board {
                     Bumps.Pr pr = Bumps.pr(repo, n);
                     prs.add(pr);
                     heads.put(pr.key(), pr.headSha());
+                    // Rebased since the elf checked it: the same bump still? (Compared once per rebase, then kept.)
+                    Check c = check(state(config), repo, pr.number());
+                    if (c != null && c.sha() != null && "SAFE".equals(c.verdict()) && !c.sha().equals(pr.headSha())) {
+                        Rebased.same(config, new GitHub(config, repo), repo, pr.number(), c.sha(), pr.headSha());
+                    }
                 }
             } catch (IOException e) {
                 errors.add(repo + ": " + e.getMessage());
@@ -93,7 +100,7 @@ final class Board {
         });
         writeJson(config.rebasingPath(), asked);
         View v = build(config.githubUser, Instant.now(), config.repos, prs, state(config), Running.read(config.runningPath()),
-                asked, errors, Instant.now());
+                asked, errors, Instant.now(), Rebased.all(config), MergeWhenGreen.all(config));
         writeJson(config.boardPath(), v);
         System.out.println("board: " + v.rows().size() + " open mvnpm bump(s) in " + String.join(", ", config.repos)
                 + (errors.isEmpty() ? "" : "; couldn't read " + String.join("; ", errors)));
@@ -112,7 +119,8 @@ final class Board {
             if (before == null) return;
             List<Bumps.Pr> prs = change.apply(before.rows().stream().map(Row::pr).toList());
             writeJson(config.boardPath(), build(before.login(), before.fetchedAt(), before.repos(), prs, state(config),
-                    Running.read(config.runningPath()), rebasing(config), before.errors(), Instant.now()));
+                    Running.read(config.runningPath()), rebasing(config), before.errors(), Instant.now(), Rebased.all(config),
+                    MergeWhenGreen.all(config)));
         } catch (IOException | RuntimeException e) {
             System.err.println("Could not update the board: " + e.getMessage());
         }
@@ -120,12 +128,27 @@ final class Board {
 
     static View build(String login, Instant fetchedAt, List<String> repos, List<Bumps.Pr> prs, JsonNode state, Running running,
                       Map<String, Rebase> asked, List<String> errors, Instant now) {
+        return build(login, fetchedAt, repos, prs, state, running, asked, errors, now, Map.of(), Map.of());
+    }
+
+    /**
+     * @param rebased the rebases compared ({@link Rebased}): a verdict holds at a head Dependabot rebased to without
+     *                changing the bump
+     * @param waiting the merges waiting for green CI ({@link MergeWhenGreen})
+     */
+    static View build(String login, Instant fetchedAt, List<String> repos, List<Bumps.Pr> prs, JsonNode state, Running running,
+                      Map<String, Rebase> asked, List<String> errors, Instant now, Map<String, Rebased.Seen> rebased,
+                      Map<String, MergeWhenGreen.Waiting> waiting) {
         List<Row> rows = new ArrayList<>();
         for (Bumps.Pr pr : prs) {
             Check check = check(state, pr.repo(), pr.number());
-            boolean current = check != null && check.sha() != null && check.sha().equals(pr.headSha());
+            boolean atHead = check != null && check.sha() != null && check.sha().equals(pr.headSha());
+            boolean carried = !atHead && check != null && check.sha() != null && "SAFE".equals(check.verdict())
+                    && Boolean.TRUE.equals(Rebased.recorded(rebased, pr.key(), check.sha(), pr.headSha()));
+            boolean current = atHead || carried;
             boolean checking = running != null && running.covers(pr, current);
-            Flows.Ctx ctx = new Flows.Ctx(check, current, checking, now, Flows.rebaseAsked(asked.get(pr.key()), pr, now));
+            Flows.Ctx ctx = new Flows.Ctx(check, current, checking, now, Flows.rebaseAsked(asked.get(pr.key()), pr, now),
+                    carried, waiting.get(pr.key()));
             rows.add(new Row(pr, Bumps.bump(pr.title()), check, current, Flows.flow(pr, ctx)));
         }
         rows.sort(Comparator.comparing((Row r) -> r.pr().updatedAt(), Comparator.nullsLast(Comparator.reverseOrder())));

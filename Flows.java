@@ -50,12 +50,37 @@ final class Flows {
      * @param current     that check was made at the PR's current head
      * @param checking    a check of this PR runs now
      * @param rebaseAsked you asked Dependabot to rebase this head in the last hour, or null
+     * @param rebased     the check was made before Dependabot rebased it, and the rebase didn't change the bump
+     *                    ({@link Rebased}): it holds here ({@code current} is true)
+     * @param merge       you clicked Merge while CI ran ({@link MergeWhenGreen}), or null
      */
-    record Ctx(Board.Check check, boolean current, boolean checking, Instant now, Instant rebaseAsked) {
+    record Ctx(Board.Check check, boolean current, boolean checking, Instant now, Instant rebaseAsked, boolean rebased,
+               MergeWhenGreen.Waiting merge) {
+
+        Ctx(Board.Check check, boolean current, boolean checking, Instant now, Instant rebaseAsked) {
+            this(check, current, checking, now, rebaseAsked, false, null);
+        }
     }
 
     static Flow flow(Bumps.Pr i, Ctx c) {
-        return rebasing(mvnpm(i, c), c);
+        return merging(rebasing(mvnpm(i, c), c), i, c);
+    }
+
+    static final Next DONT_MERGE = new Next("unqueue-merge", "Don't merge it");
+
+    /** A Merge you clicked while CI ran: it waits for green, or says why it stopped waiting. */
+    static Flow merging(Flow f, Bumps.Pr i, Ctx c) {
+        if (c.merge() == null || c.checking()) return f;
+        if (c.merge().error() != null) {
+            return f.with(YOU, c.merge().at(), c.merge().error(), f.next(), List.of(DONT_MERGE));
+        }
+        if (green(i) && f.next() != null && f.next().id().equals("merge")) {
+            return f.with(CI, c.merge().at(), "Safe and green: merges at the next refresh, as you clicked.", null, List.of(DONT_MERGE));
+        }
+        if (pending(i, c)) {
+            return f.with(CI, c.merge().at(), "Safe. Merges when CI is green, as you clicked.", null, List.of(DONT_MERGE));
+        }
+        return f;
     }
 
     /** You asked Dependabot to rebase: wait for it rather than ask again. */
@@ -98,6 +123,13 @@ final class Flows {
             return flow(1, YOU, i.updatedAt(), hasConflicts(i) ? "Conflicts with its base." : "Behind its base.",
                     new Next("dependabot-rebase", "Ask Dependabot to rebase"), List.of());
         }
+        Flow f = verdictFlow(i, c, r);
+        // Checked before Dependabot's rebase: say so, so a Safe here isn't taken for a fresh check.
+        return c.rebased() ? f.with(f.waiting(), f.since(), f.say() + " (Checked before Dependabot rebased it; the bump is the same.)",
+                f.next(), f.more()) : f;
+    }
+
+    private static Flow verdictFlow(Bumps.Pr i, Ctx c, Board.Check r) {
         return switch (r.verdict() == null ? "" : r.verdict()) {
             case "SAFE" -> {
                 if (Bumps.AWAITING_APPROVAL.equals(i.ci())) {

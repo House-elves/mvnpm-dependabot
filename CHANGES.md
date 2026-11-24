@@ -3,6 +3,17 @@
 What changed for you in each version of mvnpm-dependabot, newest first. The desk shows the parts that are new when it
 offers you an update.
 
+## 1.8.0
+
+- A safe bump stays safe when Dependabot rebases it without changing it (it does whenever another bump merges): the
+  row says so, and neither you nor the morning round has to check it again. The elf compares the lines the bump
+  changes, once per rebase. A bump that wasn't safe is still checked again, since the rebase may have fixed it.
+- Merge no longer fails with "changed since you saw it" when Dependabot only rebased the bump: it merges the rebased
+  one. If the bump itself changed, it's still refused.
+- Merge clicked while CI is still running (right after a rebase, say) waits: the row says "Merges when CI is green"
+  and the next refresh once CI is green merges it. Don't merge it calls that off. If CI fails or a day goes by, it
+  stops waiting and the row says why.
+
 ## 1.7.0
 
 - **Don't backport** on a merged bump takes it off the backport list for good, when it doesn't need a backport. Nothing

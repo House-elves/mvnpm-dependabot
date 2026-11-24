@@ -8,6 +8,7 @@
 //SOURCES WebUiTester.java
 //SOURCES Report.java StateStore.java Installer.java
 //SOURCES Bumps.java Flows.java Board.java Running.java Units.java Actions.java CheckQueue.java Backport.java
+//SOURCES Rebased.java MergeWhenGreen.java
 
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -230,7 +231,15 @@ public class MvnpmDependabot implements Callable<Integer> {
             for (int n : prNumbers) prs.add(gh.pr(n));
         } else {
             for (GitHub.Pr pr : gh.mvnpmPrs()) {
-                if (force || !state.checked(target.repo(), pr.number(), pr.sha())) prs.add(pr);
+                if (force) {
+                    prs.add(pr);
+                } else if (!state.checked(target.repo(), pr.number(), pr.sha())) {
+                    // Dependabot rebased a safe bump without changing it: the verdict holds, no need to build again.
+                    // (Not safe ones are checked again: the rebase may have brought the parent pin they needed.)
+                    if ("SAFE".equals(state.verdict(target.repo(), pr.number()))
+                            && Rebased.same(config, gh, target.repo(), pr.number(), state.sha(target.repo(), pr.number()), pr.sha())) continue;
+                    prs.add(pr);
+                }
             }
         }
         if (prs.isEmpty()) {

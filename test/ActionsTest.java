@@ -24,15 +24,14 @@ class ActionsTest {
     }
 
     @Test
-    void mergesOnlyASafeGreenBumpAtTheHeadYouSaw() {
+    void mergesOnlyASafeGreenBumpCheckedAtItsHead() {
         Bumps.Pr green = at(SHA, "SUCCESS", "CLEAN");
-        assertNull(Actions.refusal(green, SHA, verdict(SHA, "SAFE")));
-        assertTrue(Actions.refusal(at("f".repeat(40), "SUCCESS", "CLEAN"), SHA, verdict(SHA, "SAFE")).contains("changed since you saw it"));
-        assertTrue(Actions.refusal(green, SHA, null).contains("isn't checked at this head"));
-        assertTrue(Actions.refusal(green, SHA, verdict("e".repeat(40), "SAFE")).contains("isn't checked at this head"));
-        assertTrue(Actions.refusal(green, SHA, verdict(SHA, "NEEDS_HUMAN")).contains("didn't find"));
-        assertTrue(Actions.refusal(at(SHA, "PENDING", "BLOCKED"), SHA, verdict(SHA, "SAFE")).contains("isn't green"));
-        assertTrue(Actions.refusal(at(SHA, "SUCCESS", "BLOCKED"), SHA, verdict(SHA, "SAFE")).contains("isn't green"));
+        assertNull(Actions.refusal(green, true, verdict(SHA, "SAFE")));
+        assertTrue(Actions.refusal(green, true, null).contains("isn't checked at this head"));
+        assertTrue(Actions.refusal(green, false, verdict("e".repeat(40), "SAFE")).contains("isn't checked at this head"));
+        assertTrue(Actions.refusal(green, true, verdict(SHA, "NEEDS_HUMAN")).contains("didn't find"));
+        assertTrue(Actions.refusal(at(SHA, "PENDING", "BLOCKED"), true, verdict(SHA, "SAFE")).contains("isn't green"));
+        assertTrue(Actions.refusal(at(SHA, "SUCCESS", "BLOCKED"), true, verdict(SHA, "SAFE")).contains("isn't green"));
     }
 
     @Test

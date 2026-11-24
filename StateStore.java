@@ -40,6 +40,20 @@ final class StateStore {
         return repo.equals(Target.QUARKUS) && sha.equals(root.path(String.valueOf(pr)).path("sha").asText());
     }
 
+    /** The head the elf last checked this PR at, or null. */
+    String sha(String repo, int pr) {
+        String sha = root.path(key(repo, pr)).path("sha").asText(null);
+        if (sha == null && repo.equals(Target.QUARKUS)) sha = root.path(String.valueOf(pr)).path("sha").asText(null);
+        return sha;
+    }
+
+    /** The verdict the elf last recorded for this PR, or null. */
+    String verdict(String repo, int pr) {
+        String v = root.path(key(repo, pr)).path("verdict").asText(null);
+        if (v == null && repo.equals(Target.QUARKUS)) v = root.path(String.valueOf(pr)).path("verdict").asText(null);
+        return v;
+    }
+
     void record(String repo, int pr, String sha, String verdict, boolean approved, String commentUrl) throws IOException {
         if (repo.equals(Target.QUARKUS)) root.remove(String.valueOf(pr));
         ObjectNode n = root.putObject(key(repo, pr));

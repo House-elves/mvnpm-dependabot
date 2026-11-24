@@ -44,6 +44,16 @@ final class Actions {
                 System.out.println(Board.MAPPER.writeValueAsString(answer));
                 return 0;
             }
+            // A merge waiting for green CI, called off: in the elf's own state, nothing on GitHub.
+            if (action.equals("unqueue-merge")) {
+                String repo = config.repo(values.path("repo").asText(""));
+                int number = values.path("pr").asInt(0);
+                if (repo == null || number <= 0) throw new IllegalArgumentException("Which PR?");
+                MergeWhenGreen.put(config, repo + "#" + number, null);
+                Board.rejoin(config);
+                System.out.println(Board.MAPPER.writeValueAsString(Board.MAPPER.createObjectNode().put("unqueued", true)));
+                return 0;
+            }
             String repo = config.repo(values.path("repo").asText(""));
             int number = values.path("pr").asInt(0);
             if (repo == null || !repo.contains("/")) throw new IllegalArgumentException(values.path("repo").asText() + " isn't in REPOS");
@@ -127,19 +137,49 @@ final class Actions {
     }
 
     static ObjectNode merge(Config config, GitHub gh, String repo, int number, String headSha) throws IOException {
+        return merge(config, gh, repo, number, headSha, false);
+    }
+
+    /**
+     * Merges at the PR's head: the one you saw, or the one Dependabot rebased it to since without changing the bump
+     * ({@link Rebased}). When the elf found it safe but CI is still running, it waits ({@link MergeWhenGreen}) and
+     * merges at a later refresh once it's green.
+     *
+     * @param waiting a merge that was waiting for green ({@link MergeWhenGreen#run}), not your click just now
+     */
+    static ObjectNode merge(Config config, GitHub gh, String repo, int number, String headSha, boolean waiting) throws IOException {
         if (!GitHub.SHA.matcher(headSha).matches()) throw new IllegalArgumentException("Merge needs the head you saw");
         Pull p = pull(gh, repo, number);
-        String why = refusal(p.pr(), headSha, Board.check(Board.state(config), repo, number));
-        if (why != null) throw new IllegalStateException(why);
+        String head = p.pr().headSha();
+        String key = p.pr().key();
+        if (!headSha.equals(head) && !Rebased.same(config, gh, repo, number, headSha, head)) {
+            throw new IllegalStateException(key + " changed since you saw it: its head is " + abbrev(head)
+                    + " now, with a different change. Look at it again.");
+        }
+        Board.Check check = Board.check(Board.state(config), repo, number);
+        boolean checkedHere = check != null && (head.equals(check.sha())
+                || "SAFE".equals(check.verdict()) && Rebased.same(config, gh, repo, number, check.sha(), head));
+        String why = refusal(p.pr(), checkedHere, check);
+        if (why != null) {
+            if (checkedHere && "SAFE".equals(check.verdict()) && Flows.pending(p.pr(), new Flows.Ctx(check, true, false, Instant.now(), null))) {
+                Instant since = waiting ? MergeWhenGreen.all(config).getOrDefault(key, new MergeWhenGreen.Waiting(head, Instant.now(), null)).at()
+                        : Instant.now();
+                MergeWhenGreen.put(config, key, new MergeWhenGreen.Waiting(head, since, null));
+                Board.rejoin(config);
+                return Board.MAPPER.createObjectNode().put("waiting", true);
+            }
+            throw new IllegalStateException(why);
+        }
         String method = method(p.repository());
         if (method == null) throw new IllegalStateException(repo + " allows no merge method");
-        ObjectNode body = Board.MAPPER.createObjectNode().put("merge_method", method).put("sha", headSha);
+        ObjectNode body = Board.MAPPER.createObjectNode().put("merge_method", method).put("sha", head);
         JsonNode done = gh.write("PUT", "/repos/" + repo + "/pulls/" + number + "/merge", body);
-        System.out.println("Merged " + repo + "#" + number + " (" + method + ") at " + headSha.substring(0, 7));
+        System.out.println("Merged " + key + " (" + method + ") at " + head.substring(0, 7) + (waiting ? ", once CI was green" : ""));
+        MergeWhenGreen.put(config, key, null);
         // Merged: it leaves the board, for the merged bumps you can backport.
-        Board.update(config, prs -> prs.stream().filter(x -> !x.key().equals(p.pr().key())).toList());
+        Board.update(config, prs -> prs.stream().filter(x -> !x.key().equals(key)).toList());
         Backport.justMerged(gh::get, repo, number);
-        return Board.MAPPER.createObjectNode().put("merged", done.path("sha").asText(headSha)).put("method", method);
+        return Board.MAPPER.createObjectNode().put("merged", done.path("sha").asText(head)).put("method", method);
     }
 
     /** Tries a merged bump as a cherry-pick onto the backport label's branch (only reads, and fetches into git/). */
@@ -165,12 +205,12 @@ final class Actions {
         return Board.MAPPER.valueToTree(new Backport.Check(repo, number, label, c.branch(), true, List.of(), true));
     }
 
-    /** Why the tab's Merge is refused, or null: the head you saw, the elf's SAFE at that head, and green CI. */
-    static String refusal(Bumps.Pr pr, String headSha, Board.Check check) {
-        if (!headSha.equals(pr.headSha())) {
-            return pr.key() + " changed since you saw it (its head is " + abbrev(pr.headSha()) + " now). Refresh and look again.";
-        }
-        if (check == null || !headSha.equals(check.sha())) return pr.key() + " isn't checked at this head yet.";
+    /**
+     * Why the tab's Merge is refused, or null: the elf's SAFE at this head (or at one Dependabot rebased without
+     * changing the bump: {@code checkedHere}), and green CI.
+     */
+    static String refusal(Bumps.Pr pr, boolean checkedHere, Board.Check check) {
+        if (check == null || !checkedHere) return pr.key() + " isn't checked at this head yet.";
         if (!"SAFE".equals(check.verdict())) return "mvnpm-dependabot didn't find " + pr.key() + " safe (" + check.verdict() + ").";
         if (!Flows.green(pr)) return "CI on " + pr.key() + " isn't green" + (pr.ci() == null ? "" : " (" + pr.ci().toLowerCase() + ")") + ".";
         return null;
