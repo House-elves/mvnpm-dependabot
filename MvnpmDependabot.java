@@ -30,7 +30,9 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
@@ -45,7 +47,8 @@ import java.util.stream.Stream;
  * For each open Quarkus PR that bumps an org.mvnpm artifact it:
  *   1. checks the bump against the BOM: a transitive pin must stay inside the
  *      range its pinned parents ask for (BomAnalyzer);
- *   2. merges all the surviving PRs onto main in its own clone and builds a
+ *   2. merges all the surviving PRs onto their base branch (main, or a
+ *      maintenance branch like 2.x) in its own clone and builds a
  *      999-SNAPSHOT into its own ~/.mavenrc workspace repo (Workspace);
  *   3. runs CI's dependency:go-offline on the modules that use them - the step
  *      that broke on hpcc-js/wasm 2.35.1;
@@ -253,14 +256,41 @@ public class MvnpmDependabot implements Callable<Integer> {
         Files.createDirectories(runDir);
         pruneRuns(config.runsDir(), 14);
 
-        Workspace ws = new Workspace(config, target, runDir);
-        String baseSha = ws.resetToMain();
+        // Each bump is checked on the branch it merges into: Dependabot also bumps maintenance branches ("[2.x] Bump ..."),
+        // and those must not be merged into, built or judged on main. The default branch first, then the others.
+        String defaultBranch = new Workspace(config, target, runDir).defaultBranch();
+        Map<String, List<GitHub.Pr>> byBase = new TreeMap<>(
+                Comparator.comparing((String b) -> !b.equals(defaultBranch)).thenComparing(Comparator.naturalOrder()));
+        for (GitHub.Pr pr : prs) {
+            byBase.computeIfAbsent(pr.base() == null || pr.base().isBlank() ? defaultBranch : pr.base(),
+                    b -> new ArrayList<>()).add(pr);
+        }
+        List<Report.Check> checks = new ArrayList<>();
+        for (var e : byBase.entrySet()) {
+            String base = e.getKey();
+            // The default branch's logs stay where they always were; another base's go beside them.
+            Path baseRunDir = base.equals(defaultBranch) ? runDir : runDir.resolve("base-" + base.replaceAll("[^\\w.-]", "_"));
+            Files.createDirectories(baseRunDir);
+            if (!base.equals(defaultBranch)) {
+                System.out.println(target.repo() + ": checking " + e.getValue().stream().map(p -> "#" + p.number()).toList()
+                        + " on " + base);
+            }
+            checks.addAll(checkBase(config, target, gh, state, new Workspace(config, target, baseRunDir, base), baseRunDir,
+                    e.getValue()));
+        }
+        return checks;
+    }
+
+    /** Steps 1 to 5 for the PRs that merge into the workspace's branch. */
+    private List<Report.Check> checkBase(Config config, Target target, GitHub gh, StateStore state, Workspace ws,
+                                         Path runDir, List<GitHub.Pr> prs) throws IOException {
+        String baseSha = ws.resetToBase();
 
         // 1. Static: the BOM's ranges (Quarkus), or just what the bump changes (anything else).
         BomAnalyzer analyzer = new BomAnalyzer(config, ws.dir());
         List<Report.Check> checks = new ArrayList<>();
         for (GitHub.Pr pr : prs) {
-            Report.Check c = new Report.Check(target, pr);
+            Report.Check c = new Report.Check(target, pr, ws.branch());
             if (pr.parsed()) {
                 try {
                     c.analysis = target.quarkus() ? analyzer.analyze(pr) : analyzer.analyzeDirect(pr);
@@ -403,7 +433,7 @@ public class MvnpmDependabot implements Callable<Integer> {
 
         // It failed: is the base branch itself broken?
         System.out.println(uiName + " test failed; checking " + base + " without any bump");
-        ws.resetToMain();
+        ws.resetToBase();
         var baseline = rebuild.getAsBoolean() ? ui.test("baseline", List.of())
                 : DevUiTester.Outcome.notRun("the rebuild of " + base + " without the bumps failed");
         if (!baseline.ran() || !baseline.pass()) {
@@ -424,7 +454,7 @@ public class MvnpmDependabot implements Callable<Integer> {
         // The base branch is fine, so bisect: each bump alone.
         for (var c : merged) {
             System.out.println(uiName + " test with only #" + c.pr.number());
-            ws.resetToMain();
+            ws.resetToBase();
             ws.merge(c.pr);
             var alone = rebuild.getAsBoolean() ? ui.test("pr-" + c.pr.number(), List.of(c))
                     : DevUiTester.Outcome.notRun("the rebuild with only this bump failed");

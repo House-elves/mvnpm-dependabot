@@ -28,7 +28,8 @@ final class GitHub {
     static final Pattern BUMP = Pattern.compile(
             "Bump ([\\w.-]+):([\\w.-]+) from (\\S+) to (\\S+)");
 
-    record Pr(int number, String title, String branch, String sha, String url,
+    /** @param base the branch it merges into: main, or a maintenance branch (2.x) Dependabot also bumps */
+    record Pr(int number, String title, String branch, String base, String sha, String url,
               String groupId, String artifactId, String from, String to) {
         boolean parsed() { return artifactId != null; }
         String ga()      { return groupId + ":" + artifactId; }
@@ -48,7 +49,7 @@ final class GitHub {
     List<Pr> mvnpmPrs() throws IOException {
         JsonNode arr = json(gh("pr", "list", "--repo", repo, "--author", "app/dependabot",
                 "--state", "open", "--limit", "100",
-                "--json", "number,title,headRefName,headRefOid,url"));
+                "--json", "number,title,headRefName,baseRefName,headRefOid,url"));
         List<Pr> out = new ArrayList<>();
         for (JsonNode n : arr) {
             String branch = n.path("headRefName").asText();
@@ -56,7 +57,7 @@ final class GitHub {
             if (!branch.contains("org.mvnpm") && !title.contains("org.mvnpm")) continue;
             Matcher m = BUMP.matcher(title);
             boolean ok = m.find() && m.group(1).startsWith("org.mvnpm");
-            out.add(new Pr(n.path("number").asInt(), title, branch, n.path("headRefOid").asText(),
+            out.add(new Pr(n.path("number").asInt(), title, branch, n.path("baseRefName").asText(null), n.path("headRefOid").asText(),
                     n.path("url").asText(),
                     ok ? m.group(1) : null, ok ? m.group(2) : null,
                     ok ? m.group(3) : null, ok ? m.group(4) : null));
@@ -68,11 +69,11 @@ final class GitHub {
     /** One PR by number, whatever its author - for --pr runs. */
     Pr pr(int number) throws IOException {
         JsonNode n = json(gh("pr", "view", String.valueOf(number), "--repo", repo,
-                "--json", "number,title,headRefName,headRefOid,url"));
+                "--json", "number,title,headRefName,baseRefName,headRefOid,url"));
         Matcher m = BUMP.matcher(n.path("title").asText());
         boolean ok = m.find() && m.group(1).startsWith("org.mvnpm");
         return new Pr(number, n.path("title").asText(), n.path("headRefName").asText(),
-                n.path("headRefOid").asText(), n.path("url").asText(),
+                n.path("baseRefName").asText(null), n.path("headRefOid").asText(), n.path("url").asText(),
                 ok ? m.group(1) : null, ok ? m.group(2) : null,
                 ok ? m.group(3) : null, ok ? m.group(4) : null);
     }

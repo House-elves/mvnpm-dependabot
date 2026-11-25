@@ -19,8 +19,9 @@ open Dependabot PRs bumping org.mvnpm*  (not yet checked at their head commit)
   |    the range of every pinned parent? (POMs from Central, cached)
   |    -> out of range: NOT SAFE, nothing built
   v
-own Quarkus clone (~/Projects/quarkus-mvnpm-elf), reset to upstream main,
-every surviving PR merged in
+own Quarkus clone (~/Projects/quarkus-mvnpm-elf), reset to the PRs' upstream base
+branch, every surviving PR merged in (a bump into a maintenance branch, "[2.x] Bump
+...", is checked on that branch, after the ones into main)
   |
   | 2. build 999-SNAPSHOT  (-Dquickly -Dno-test-modules -T 16C, like `qb`)
   |    into ~/.m2/worktrees/quarkus-mvnpm-elf/repository, its own local repo
@@ -32,7 +33,7 @@ quarkus:dev on the snapshot
   | 4. headless Claude + chrome-devtools-mcp (--headless --isolated) walks the
   |    Dev UI: every menu page, every extension card's pages, and exercises the
   |    pages whose JS imports a bumped library; console + network + screenshots
-  |    -> fails? re-run on plain main (is main itself broken?), then each bump
+  |    -> fails? re-run on the plain base branch (is it broken already?), then each bump
   |       alone, to pin it on the right PR
   v
 5. a comment on each PR (edited in place on re-checks), and an approval for the
@@ -69,7 +70,7 @@ A repo can have a profile in `WebUiTester.profile()`: the fixtures its UI fetche
 |---|---|---|
 | ✅ Safe | every check passes | yes, unless it is a **major** bump of a root library and `APPROVE_MAJOR=false` |
 | ❌ Not safe | out of range, CI resolution fails, or the Dev UI breaks with only this bump | no |
-| ⚠️ Needs a human look | title not a single bump, merge conflict, build failure, Dev UI already broken on main, bumps only break together, the UI session didn't finish | no |
+| ⚠️ Needs a human look | title not a single bump, merge conflict, build failure, Dev UI already broken on the base branch, bumps only break together, the UI session didn't finish | no |
 
 The comment and the approval are posted **as `GITHUB_USER`** (the maintainer) and the approval is binding. GitHub doesn't notify you of your own @mention, so Elf Desk shows each verdict instead.
 

@@ -13,6 +13,8 @@ final class Report {
     static final class Check {
         final Target target;
         final GitHub.Pr pr;
+        /** The branch it was checked on: the PR's base. */
+        final String base;
         BomAnalyzer.Analysis analysis;
         String analysisError;
         boolean conflicted;
@@ -26,9 +28,10 @@ final class Report {
         final List<String> reasons = new ArrayList<>();
         boolean approve;
 
-        Check(Target target, GitHub.Pr pr) {
+        Check(Target target, GitHub.Pr pr, String base) {
             this.target = target;
             this.pr = pr;
+            this.base = base;
         }
 
         /** Failed before anything was built - it is left out of the merge. */
@@ -55,7 +58,7 @@ final class Report {
             }
         } else if (c.conflicted) {
             c.verdict = Verdict.NEEDS_HUMAN;
-            c.reasons.add("the branch does not merge cleanly into main - `@dependabot rebase` it");
+            c.reasons.add("the branch does not merge cleanly into " + c.base + " - `@dependabot rebase` it");
         } else if (c.buildError != null) {
             c.verdict = Verdict.NEEDS_HUMAN;
             c.reasons.add((c.target.quarkus() ? "the Quarkus build" : "the build (or the tests)")
@@ -115,7 +118,7 @@ final class Report {
             if (!a.managed()) {
                 sb.append("| BOM pin | ⚠️ not pinned in `").append(BomAnalyzer.BOM).append("` |\n");
             } else if (!a.pinnedInBom().equals(a.from())) {
-                sb.append("| BOM pin | main pins `").append(a.pinnedInBom()).append("` (PR says from `")
+                sb.append("| BOM pin | ").append(baseBranch).append(" pins `").append(a.pinnedInBom()).append("` (PR says from `")
                   .append(a.from()).append("`) |\n");
             }
             if (!a.root()) {

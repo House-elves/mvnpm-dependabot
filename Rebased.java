@@ -13,9 +13,9 @@ import java.util.Map;
 
 /**
  * Dependabot rebases a bump whenever another one merges (they all touch the same pom), so its head moves while the
- * bump stays the same. The elf's check builds the bump merged into the latest main anyway, so its verdict still holds
+ * bump stays the same. The elf's check builds the bump merged into the latest of its base branch anyway, so its verdict still holds
  * when the PR now changes exactly the lines it checked (only a SAFE one: a NOT_SAFE bump may be fine on the newer
- * main, the parent pin it needed bumped there, so that one is checked again): then there's no need to build Quarkus again, and a Merge you
+ * base, the parent pin it needed bumped there, so that one is checked again): then there's no need to build Quarkus again, and a Merge you
  * clicked on the head before the rebase is the same merge.
  *
  * <p>

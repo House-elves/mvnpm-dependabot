@@ -3,6 +3,13 @@
 What changed for you in each version of mvnpm-dependabot, newest first. The desk shows the parts that are new when it
 offers you an update.
 
+## 1.9.0
+
+- A bump into a maintenance branch ("[2.x] Bump org.mvnpm:graphql-ws ...") is checked on that branch, not on main: the
+  elf merges it into 2.x, builds and tests it there, and its comment says "Merges into 2.x". Before, it was merged
+  into main and came back "does not merge cleanly into main" though it merged cleanly into 2.x. The bumps into main
+  are checked first, then each other branch's.
+
 ## 1.8.0
 
 - A safe bump stays safe when Dependabot rebases it without changing it (it does whenever another bump merges): the

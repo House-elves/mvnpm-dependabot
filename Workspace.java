@@ -28,13 +28,21 @@ final class Workspace {
     private final Target target;
     private final Path dir;
     private final Path runDir;
-    private String branch;
+    private final String base;
+    private String defaultBranch;
 
+    /** On the repo's default branch. */
     Workspace(Config config, Target target, Path runDir) {
+        this(config, target, runDir, null);
+    }
+
+    /** On {@code base} (a PR's base branch, 2.x say), or the default branch when null. */
+    Workspace(Config config, Target target, Path runDir, String base) {
         this.config = config;
         this.target = target;
         this.dir = target.checkout();
         this.runDir = runDir;
+        this.base = base == null || base.isBlank() ? null : base;
     }
 
     Path dir() { return dir; }
@@ -42,27 +50,32 @@ final class Workspace {
     String upstream() { return "https://github.com/" + target.repo() + ".git"; }
 
     /** The upstream default branch (main for Quarkus and SmallRye, but not for every repo). */
-    String branch() throws IOException {
-        if (branch == null) {
+    String defaultBranch() throws IOException {
+        if (defaultBranch == null) {
             for (String line : git(dir.getParent(), 2, "ls-remote", "--symref", upstream(), "HEAD").split("\n")) {
                 if (line.startsWith("ref: refs/heads/")) {
-                    branch = line.substring("ref: refs/heads/".length(), line.indexOf('\t')).strip();
+                    defaultBranch = line.substring("ref: refs/heads/".length(), line.indexOf('\t')).strip();
                 }
             }
-            if (branch == null) branch = "main";
+            if (defaultBranch == null) defaultBranch = "main";
         }
-        return branch;
+        return defaultBranch;
     }
 
-    /** Clones on first use, then resets to a clean upstream default branch. Returns its sha. */
-    String resetToMain() throws IOException {
+    /** The branch the bumps are checked on: the PRs' base. */
+    String branch() throws IOException {
+        return base != null ? base : defaultBranch();
+    }
+
+    /** Clones on first use, then resets to a clean upstream {@link #branch()}. Returns its sha. */
+    String resetToBase() throws IOException {
         if (!Files.isDirectory(dir.resolve(".git"))) {
             System.out.println("cloning " + upstream() + " into " + dir + " (first run)");
             Files.createDirectories(dir.getParent());
             git(dir.getParent(), 60, "clone", "--filter=blob:none", "--no-checkout", upstream(), dir.getFileName().toString());
         }
-        git(dir, 15, "fetch", "--no-tags", upstream(), "+refs/heads/" + branch() + ":refs/elf/main");
-        git(dir, 5, "checkout", "--force", "--detach", "refs/elf/main");
+        git(dir, 15, "fetch", "--no-tags", upstream(), "+refs/heads/" + branch() + ":refs/elf/base");
+        git(dir, 5, "checkout", "--force", "--detach", "refs/elf/base");
         git(dir, 5, "clean", "-fd", "--exclude=target");
         return git(dir, 1, "rev-parse", "HEAD").strip();
     }
